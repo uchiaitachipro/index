@@ -34,8 +34,9 @@ import safetensors
 from transformers import SeamlessM4TFeatureExtractor
 import random
 import torch.nn.functional as F
+from indextts.infer_v2 import QwenEmotion, find_most_similar_cosine
 
-class IndexTTS2:
+class IndexTTS2SubTitle:
     def __init__(
             self, cfg_path="checkpoints/config.yaml", model_dir="checkpoints", use_fp16=False, device=None,
             use_cuda_kernel=None,use_deepspeed=False
@@ -486,6 +487,17 @@ class IndexTTS2:
         text_tokens_list = self.tokenizer.tokenize(text)
         segments = self.tokenizer.split_segments(text_tokens_list, max_text_tokens_per_segment, quick_streaming_tokens = quick_streaming_tokens)
         segments_count = len(segments)
+        
+        # 为字幕功能准备：获取原始文本的分段
+        original_text_segments = []
+        for segment_tokens in segments:
+            # 将 tokens 转换回文本: tokens -> ids -> text
+            segment_ids = self.tokenizer.convert_tokens_to_ids(segment_tokens)
+            segment_text = self.tokenizer.decode(segment_ids)
+            original_text_segments.append(segment_text)
+        
+        if verbose:
+            print("original_text_segments:", original_text_segments)
 
         text_token_ids = self.tokenizer.convert_tokens_to_ids(text_tokens_list)
         if self.tokenizer.unk_token_id in text_token_ids:
@@ -516,6 +528,11 @@ class IndexTTS2:
         bigvgan_time = 0
         has_warned = False
         silence = None # for stream_return
+        
+        # 字幕信息收集
+        subtitles = []
+        current_time_ms = 0.0  # 当前累计时间（毫秒）
+        
         for seg_idx, sent in enumerate(segments):
             self._set_gr_progress(0.2 + 0.7 * seg_idx / segments_count,
                                   f"speech synthesis {seg_idx + 1}/{segments_count}...")
@@ -648,6 +665,35 @@ class IndexTTS2:
                     print(f"wav shape: {wav.shape}", "min:", wav.min(), "max:", wav.max())
                 # wavs.append(wav[:, :-512])
                 wavs.append(wav.cpu())  # to cpu before saving
+                
+                # 计算当前片段的时长（毫秒）
+                segment_duration_ms = (wav.shape[-1] / sampling_rate) * 1000.0
+                time_begin = current_time_ms
+                time_end = current_time_ms + segment_duration_ms
+                
+                # 获取当前片段的原始文本和处理后的文本
+                segment_original_text = original_text_segments[seg_idx]
+                # sent 是 token 列表，需要转换为 ids 再 decode
+                segment_ids = self.tokenizer.convert_tokens_to_ids(sent)
+                segment_pronounce_text = self.tokenizer.decode(segment_ids)
+                
+                # 添加字幕信息
+                subtitle_item = {
+                    "text": segment_original_text,
+                    "pronounce_text": segment_pronounce_text,
+                    "time_begin": time_begin,
+                    "time_end": time_end,
+                }
+                subtitles.append(subtitle_item)
+                
+                if verbose:
+                    print(f"Subtitle for segment {seg_idx}: {subtitle_item}")
+                
+                # 更新当前时间（加上片段时长和静音间隔）
+                current_time_ms = time_end
+                if seg_idx < segments_count - 1:  # 不是最后一个片段，添加静音间隔
+                    current_time_ms += interval_silence
+                
                 if stream_return:
                     yield wav.cpu()
                     if silence == None:
@@ -669,6 +715,14 @@ class IndexTTS2:
 
         # save audio
         wav = wav.cpu()  # to cpu
+        
+        # 打印字幕信息
+        print(f">> Generated {len(subtitles)} subtitle segments")
+        if verbose:
+            print(">> Subtitles:")
+            for i, sub in enumerate(subtitles):
+                print(f"   [{i}] {sub['time_begin']:.2f}ms - {sub['time_end']:.2f}ms: {sub['text'][:30]}...")
+        
         if output_path:
             # 直接保存音频到指定路径中
             if os.path.isfile(output_path):
@@ -680,141 +734,39 @@ class IndexTTS2:
             print(">> wav file saved to:", output_path)
             if stream_return:
                 return None
-            yield output_path
+            # 返回音频路径和字幕信息
+            yield {"audio_path": output_path, "subtitles": subtitles}
         else:
             if stream_return:
                 return None
-            # 返回以符合Gradio的格式要求
+            # 返回以符合Gradio的格式要求，同时包含字幕信息
             wav_data = wav.type(torch.int16)
             wav_data = wav_data.numpy().T
-            yield (sampling_rate, wav_data)
-
-
-def find_most_similar_cosine(query_vector, matrix):
-    query_vector = query_vector.float()
-    matrix = matrix.float()
-
-    similarities = F.cosine_similarity(query_vector, matrix, dim=1)
-    most_similar_index = torch.argmax(similarities)
-    return most_similar_index
-
-class QwenEmotion:
-    def __init__(self, model_dir):
-        self.model_dir = model_dir
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_dir)
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.model_dir,
-            torch_dtype="float16",  # "auto"
-            device_map="auto"
-        )
-        self.prompt = "文本情感分类"
-        self.cn_key_to_en = {
-            "高兴": "happy",
-            "愤怒": "angry",
-            "悲伤": "sad",
-            "恐惧": "afraid",
-            "反感": "disgusted",
-            # TODO: the "低落" (melancholic) emotion will always be mapped to
-            # "悲伤" (sad) by QwenEmotion's text analysis. it doesn't know the
-            # difference between those emotions even if user writes exact words.
-            # SEE: `self.melancholic_words` for current workaround.
-            "低落": "melancholic",
-            "惊讶": "surprised",
-            "自然": "calm",
-        }
-        self.desired_vector_order = ["高兴", "愤怒", "悲伤", "恐惧", "反感", "低落", "惊讶", "自然"]
-        self.melancholic_words = {
-            # emotion text phrases that will force QwenEmotion's "悲伤" (sad) detection
-            # to become "低落" (melancholic) instead, to fix limitations mentioned above.
-            "低落",
-            "melancholy",
-            "melancholic",
-            "depression",
-            "depressed",
-            "gloomy",
-        }
-        self.max_score = 1.2
-        self.min_score = 0.0
-
-    def clamp_score(self, value):
-        return max(self.min_score, min(self.max_score, value))
-
-    def convert(self, content):
-        # generate emotion vector dictionary:
-        # - insert values in desired order (Python 3.7+ `dict` remembers insertion order)
-        # - convert Chinese keys to English
-        # - clamp all values to the allowed min/max range
-        # - use 0.0 for any values that were missing in `content`
-        emotion_dict = {
-            self.cn_key_to_en[cn_key]: self.clamp_score(content.get(cn_key, 0.0))
-            for cn_key in self.desired_vector_order
-        }
-
-        # default to a calm/neutral voice if all emotion vectors were empty
-        if all(val <= 0.0 for val in emotion_dict.values()):
-            print(">> no emotions detected; using default calm/neutral voice")
-            emotion_dict["calm"] = 1.0
-
-        return emotion_dict
-
-    def inference(self, text_input):
-        start = time.time()
-        messages = [
-            {"role": "system", "content": f"{self.prompt}"},
-            {"role": "user", "content": f"{text_input}"}
-        ]
-        text = self.tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-            enable_thinking=False,
-        )
-        model_inputs = self.tokenizer([text], return_tensors="pt").to(self.model.device)
-
-        # conduct text completion
-        generated_ids = self.model.generate(
-            **model_inputs,
-            max_new_tokens=32768,
-            pad_token_id=self.tokenizer.eos_token_id
-        )
-        output_ids = generated_ids[0][len(model_inputs.input_ids[0]):].tolist()
-
-        # parsing thinking content
-        try:
-            # rindex finding 151668 (</think>)
-            index = len(output_ids) - output_ids[::-1].index(151668)
-        except ValueError:
-            index = 0
-
-        content = self.tokenizer.decode(output_ids[index:], skip_special_tokens=True)
-
-        # decode the JSON emotion detections as a dictionary
-        try:
-            content = json.loads(content)
-        except json.decoder.JSONDecodeError:
-            # invalid JSON; fallback to manual string parsing
-            # print(">> parsing QwenEmotion response", content)
-            content = {
-                m.group(1): float(m.group(2))
-                for m in re.finditer(r'([^\s":.,]+?)"?\s*:\s*([\d.]+)', content)
-            }
-            # print(">> dict result", content)
-
-        # workaround for QwenEmotion's inability to distinguish "悲伤" (sad) vs "低落" (melancholic).
-        # if we detect any of the IndexTTS "melancholic" words, we swap those vectors
-        # to encode the "sad" emotion as "melancholic" (instead of sadness).
-        text_input_lower = text_input.lower()
-        if any(word in text_input_lower for word in self.melancholic_words):
-            # print(">> before vec swap", content)
-            content["悲伤"], content["低落"] = content.get("低落", 0.0), content.get("悲伤", 0.0)
-            # print(">>  after vec swap", content)
-
-        return self.convert(content)
+            yield {"audio_data": (sampling_rate, wav_data), "subtitles": subtitles}
 
 
 if __name__ == "__main__":
-    prompt_wav = "examples/voice_01.wav"
-    text = '欢迎大家来体验indextts2，并给予我们意见与反馈，谢谢大家。'
+    prompt_wav = "examples/voice_06.wav"
+    text = """
+“老家伙别倚老卖老！”两人根本不惧。
+就在这时，大夏皇子与白衣小尼姑赶到了，夏一鸣隔着很远就大笑道：“古风兄弟你终于回来了。”
+叶凡惊讶的发现，那只金色的小精灵也出现了，粘在白衣小尼姑的肩头，正在气愤的冲他挥动小爪子呢。
+“真的要有惊天豪赌吗，百万斤源，足以震动整片北域了！”妖月空大笑，走了进来。
+“大手笔啊！”其他宫阙中，一些老辈人物听到了这边的动静，全都惊叹。
+“古风小弟又要做出惊世之举了吗？”轻笑声传来，美丽到近乎梦幻的安妙依出现，她也在此幻食府。    
+    """
 
-    tts = IndexTTS2(cfg_path="checkpoints/config.yaml", model_dir="checkpoints", use_cuda_kernel=False, use_fp16=True)
-    tts.infer(spk_audio_prompt=prompt_wav, text=text, output_path="gen.wav", verbose=True)
+    tts = IndexTTS2SubTitle(cfg_path="checkpoints/config.yaml", model_dir="checkpoints", use_cuda_kernel=False, use_fp16=True)
+    result = tts.infer(spk_audio_prompt=prompt_wav, text=text, output_path="gen1.wav", verbose=True)
+    
+    # 输出结果
+    print("\n>> 返回结果:")
+    print(f"音频文件: {result['audio_path']}")
+    print(f"\n>> 字幕信息 ({len(result['subtitles'])} 个片段):")
+    for i, subtitle in enumerate(result['subtitles']):
+        print(f"\n片段 {i+1}:")
+        print(f"  原始文本: {subtitle['text']}")
+        print(f"  发音文本: {subtitle['pronounce_text']}")
+        print(f"  开始时间: {subtitle['time_begin']:.2f} ms")
+        print(f"  结束时间: {subtitle['time_end']:.2f} ms")
+        print(f"  时长: {subtitle['time_end'] - subtitle['time_begin']:.2f} ms")
