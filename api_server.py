@@ -292,7 +292,7 @@ if __name__ == "__main__":
     parser.add_argument("--host", type=str, default="0.0.0.0")
     parser.add_argument("--port", type=int, default=6006)
     parser.add_argument("--model_dir", type=str, default="checkpoints", help="Model checkpoints directory")
-    parser.add_argument("--is_fp16", action="store_true", default=False, help="Fp16 infer")
+    parser.add_argument("--fp16", action="store_true", default=False, help="Fp16 infer")
     parser.add_argument("--use_cuda_kernel", action="store_true", default=False, help="Use CUDA kernel")
     parser.add_argument("--use_deepspeed", action="store_true", default=False, help="Use DeepSpeed")
     parser.add_argument("--verbose", action="store_true", default=False, help="Enable verbose mode")
