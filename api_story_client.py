@@ -13,6 +13,8 @@ from pathlib import Path
 import time
 from datetime import datetime
 
+USE_LOCAL = False
+BASE_URL = "http://localhost:6006" if USE_LOCAL else "http://117.50.190.136:6006"
 
 # 测试用例配置
 TEST_CASES = [
@@ -372,7 +374,7 @@ def run_test_case(test_case: dict, api_url: str, output_dir: str) -> bool:
     return success
 
 
-def run_all_tests(api_url: str = "http://localhost:6006", output_dir: str = "outputs"):
+def run_all_tests(api_url: str = BASE_URL, output_dir: str = "outputs"):
     """
     运行所有测试用例
     
@@ -444,8 +446,8 @@ def main():
     parser.add_argument(
         "--api-url",
         type=str,
-        default="http://localhost:6006",
-        help="API 服务器地址 (默认: http://localhost:6006)"
+        default=BASE_URL,
+        help=f"API 服务器地址 (默认: {BASE_URL})"
     )
     parser.add_argument(
         "--output-dir",

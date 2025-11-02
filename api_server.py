@@ -624,78 +624,53 @@ async def _process_story_audio_generation(story_data: list, custom_voice_map: Op
         if api_verbose:
             print(f"   调整总时长: 移除最后 {silence_interval_ms:.0f}ms 静音间隔")
     
-    # 合并所有音频片段（参考 infer_v2_subtitle.py 的实现）
+    # 使用 pydub 合并所有音频片段
     print(f">> 合并 {len(all_audio_segments)} 个音频片段（含 {silence_interval_ms:.0f}ms 静音间隔）...")
     final_sr = all_audio_segments[0][0]
     
     try:
-        import torch
+        from pydub import AudioSegment
         
-        # 准备音频片段列表（转换为 torch tensor）
-        wav_tensors = []
-        silence_duration = silence_interval_ms / 1000.0  # 秒
-        silence_samples = int(final_sr * silence_duration)
+        # 创建静音片段（用于间隔）
+        silence = AudioSegment.silent(duration=int(silence_interval_ms), frame_rate=int(final_sr))
+        
+        # 合并所有音频片段
+        combined = None
         
         for idx, (sr, wav) in enumerate(all_audio_segments):
-            # 展平为 1D 数组
-            if wav.ndim > 1:
-                wav = wav.flatten()
+            # 使用 soundfile 写入 BytesIO，然后用 AudioSegment 读取
+            with io.BytesIO() as buffer:
+                sf.write(buffer, wav, sr, format='WAV')
+                buffer.seek(0)
+                audio_segment = AudioSegment.from_wav(buffer)
             
-            # 确保采样率一致
-            if sr != final_sr:
-                ratio = final_sr / sr
-                new_length = int(len(wav) * ratio)
-                wav = np.interp(
-                    np.linspace(0, len(wav), new_length),
-                    np.arange(len(wav)),
-                    wav
-                )
-            
-            # 转换为 torch tensor (1, n) 形状
-            wav_tensor = torch.from_numpy(wav.astype(np.float32)).unsqueeze(0)
-            
-            # 简单的淡入淡出（10ms）
-            fade_samples = int(final_sr * 0.01)
-            if wav_tensor.shape[1] > fade_samples * 2:
-                # 淡入
-                fade_in = torch.linspace(0, 1, fade_samples)
-                wav_tensor[0, :fade_samples] *= fade_in
-                # 淡出
-                fade_out = torch.linspace(1, 0, fade_samples)
-                wav_tensor[0, -fade_samples:] *= fade_out
-            
-            wav_tensors.append(wav_tensor)
+            # 拼接音频片段
+            if combined is None:
+                combined = audio_segment
+            else:
+                combined = combined + audio_segment
             
             # 在片段之间添加静音（最后一个片段除外）
             if idx < len(all_audio_segments) - 1:
-                silence_tensor = torch.zeros(1, silence_samples)
-                wav_tensors.append(silence_tensor)
+                combined = combined + silence
         
-        # 合并所有音频片段
-        final_audio_tensor = torch.cat(wav_tensors, dim=1)
-        
-        # 归一化（防止削波）
-        max_val = final_audio_tensor.abs().max()
-        if max_val > 0:
-            final_audio_tensor = final_audio_tensor * (0.95 / max_val)
-            if api_verbose:
-                print(f"   归一化: 峰值 {max_val:.4f} -> {final_audio_tensor.abs().max():.4f}")
-        
-        # 转换回 numpy (移除 batch 维度)
-        final_audio = final_audio_tensor.squeeze(0).numpy()
+        # 导出为 WAV 字节流
+        with io.BytesIO() as wav_buffer:
+            combined.export(wav_buffer, format="wav")
+            wav_bytes = wav_buffer.getvalue()
         
         if api_verbose:
-            print(f"   使用 PyTorch 合成: {len(wav_tensors)} 个片段")
+            print(f"   使用 pydub 合成: {len(all_audio_segments)} 个片段，总时长 {len(combined)}ms")
             
     except ImportError:
-        # 如果没有 torch，使用简化的 numpy 方式
+        # 如果没有 pydub，使用简化的 numpy 方式作为降级方案
         if api_verbose:
-            print(f"   PyTorch 不可用，使用 NumPy 合成")
+            print(f"   pydub 不可用，使用 NumPy 合成")
         
         audio_arrays = []
         silence_duration = silence_interval_ms / 1000.0
         silence_samples = int(final_sr * silence_duration)
-        silence = np.zeros(silence_samples, dtype=np.float32)
+        silence_np = np.zeros(silence_samples, dtype=np.float32)
         
         fade_samples = int(final_sr * 0.01)  # 10ms 淡入淡出
         
@@ -727,7 +702,7 @@ async def _process_story_audio_generation(story_data: list, custom_voice_map: Op
             
             # 添加静音
             if idx < len(all_audio_segments) - 1:
-                audio_arrays.append(silence)
+                audio_arrays.append(silence_np)
         
         # 合并
         final_audio = np.concatenate(audio_arrays)
@@ -736,11 +711,11 @@ async def _process_story_audio_generation(story_data: list, custom_voice_map: Op
         max_val = np.abs(final_audio).max()
         if max_val > 0:
             final_audio = final_audio * (0.95 / max_val)
-    
-    # 生成音频字节流
-    with io.BytesIO() as wav_buffer:
-        sf.write(wav_buffer, final_audio, final_sr, format='WAV')
-        wav_bytes = wav_buffer.getvalue()
+        
+        # 生成音频字节流
+        with io.BytesIO() as wav_buffer:
+            sf.write(wav_buffer, final_audio, final_sr, format='WAV')
+            wav_bytes = wav_buffer.getvalue()
     
     # 编码为 base64
     audio_base64 = base64.b64encode(wav_bytes).decode('utf-8')
