@@ -33,9 +33,11 @@ DEFAULT_SPEAKER_MAP = {
     ("man", "叶凡"): "fanqie_man_main_role_12x.mp3",
     ("wo", "安妙依"): "fanqie_woman_yaorao_12x.mp3",
     ("woman", "安妙依"): "fanqie_woman_yaorao_12x.mp3",
-    ("man", "default"): "voice_03.wav",
-    ("wo", "default"): "voice_04.wav",
-    ("woman", "default"): "voice_04.wav",
+    ("wo", "姬紫月"): "minmax_young_girl_12x.mp3",
+     ("woman", "姬紫月"): "minmax_young_girl_12x.mp3",
+    ("man", "default"): "minmax_yongth_qingche_12x.mp3",
+    ("wo", "default"): "minmax_yongth_qingche_12x.mp3",
+    ("woman", "default"): "minmax_yongth_qingche_12x.mp3",
     ("unknown", "default"): "fanqie_speaker_default_12x.mp3"
 }
 
@@ -450,7 +452,7 @@ async def _process_story_audio_generation(story_data: list, custom_voice_map: Op
     loop = asyncio.get_event_loop()
     
     # 定义中文标点符号集合
-    chinese_punctuation = set('。，、""''：；？⁇！…—·《》〈〉【】「」『』（）(),.;:!?\'"…""\n\r\t')
+    chinese_punctuation = set('。，、""''：；？⁇！…—·《》〈〉【】「」『』（）(),.;:!?\'"…“”\n\r\t')
     
     for idx, item in enumerate(story_data):
         text = item.get("text", "").strip()

@@ -440,17 +440,6 @@
     "emotion": null
   },
   {
-    "type": "unknown",
-    "text": "”“",
-    "chapter_number": -1,
-    "sex": "unknown",
-    "name": "",
-    "alias": [
-      null
-    ],
-    "emotion": null
-  },
-  {
     "type": "c",
     "text": "你又怎知，古之大帝不是因过去，而证道了那一世。",
     "chapter_number": -1,
@@ -862,17 +851,6 @@
     "emotion": null
   },
   {
-    "type": "unknown",
-    "text": "”“",
-    "chapter_number": -1,
-    "sex": "unknown",
-    "name": "",
-    "alias": [
-      null
-    ],
-    "emotion": null
-  },
-  {
     "type": "c",
     "text": "不说这些了，未来太遥远，注重当世，不如注重当时。",
     "chapter_number": -1,
@@ -1003,7 +981,6 @@
     ],
     "emotion": null
   },
-
   {
     "type": "c",
     "text": "她要回来了，我的时间不多了。",
@@ -1013,7 +990,6 @@
     "alias": null,
     "emotion": null
   },
-
   {
     "type": "s",
     "text": "叶凡拉住了她，静静的不说话，只是看着。",
