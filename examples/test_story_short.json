@@ -1,0 +1,57 @@
+[
+  {
+    "type": "t",
+    "text": "测试故事",
+    "chapter_number": 1,
+    "sex": "unknown",
+    "name": "",
+    "alias": null,
+    "emotion": null
+  },
+  {
+    "type": "s",
+    "text": "这是一个测试故事的开始。天气晴朗，阳光明媚。",
+    "chapter_number": -1,
+    "sex": "unknown",
+    "name": "",
+    "alias": null,
+    "emotion": null
+  },
+  {
+    "type": "c",
+    "text": "你好，今天天气真不错。",
+    "chapter_number": -1,
+    "sex": "man",
+    "name": "叶凡",
+    "alias": null,
+    "emotion": "happy"
+  },
+  {
+    "type": "s",
+    "text": "叶凡微笑着说道。",
+    "chapter_number": -1,
+    "sex": "unknown",
+    "name": "",
+    "alias": null,
+    "emotion": null
+  },
+  {
+    "type": "c",
+    "text": "是啊，我们出去走走吧。",
+    "chapter_number": -1,
+    "sex": "wo",
+    "name": "安妙依",
+    "alias": null,
+    "emotion": "happy"
+  },
+  {
+    "type": "m",
+    "text": "叶凡心想，这真是美好的一天。",
+    "chapter_number": -1,
+    "sex": "man",
+    "name": "叶凡",
+    "alias": null,
+    "emotion": null
+  }
+]
+
