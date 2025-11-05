@@ -16,6 +16,7 @@ from datetime import datetime
 USE_LOCAL = False
 BASE_URL = "http://localhost:6006" if USE_LOCAL else "http://117.50.190.136:6006"
 
+
 # 测试用例配置
 TEST_CASES = [
     # {
@@ -26,13 +27,21 @@ TEST_CASES = [
     #     "output_suffix": "no_voicemap",
     #     "use_json_api": False
     # },
+    # {
+    #     "name": "无音色映射测试（JSON直接调用）",
+    #     "description": "测试使用默认音色映射生成故事音频（JSON直接调用方式）",
+    #     "json_file": "examples/role_778_True.json",
+    #     "voice_map": None,
+    #     "output_suffix": "json_api_no_voicemap",
+    #     "use_json_api": True
+    # },
     {
-        "name": "无音色映射测试（JSON直接调用）",
-        "description": "测试使用默认音色映射生成故事音频（JSON直接调用方式）",
+        "name": "单个条目批量测试",
+        "description": "依次调用 generate_story_audio_single API 处理前N个条目",
         "json_file": "examples/role_778_True.json",
-        "voice_map": None,
-        "output_suffix": "json_api_no_voicemap",
-        "use_json_api": True
+        "item_count": 3,  # 处理前5个条目
+        "output_suffix": "single_batch",
+        "use_single_api": True
     },
     # {
     #     "name": "自定义音色映射测试",
@@ -304,6 +313,168 @@ def generate_srt(subtitles: list, output_path: str):
             f.write("\n")
 
 
+def generate_story_audio_single_api(
+    api_url: str,
+    story_item: dict,
+    output_dir: str = "outputs",
+    output_index: int = 1
+):
+    """
+    调用单个故事条目 API 生成音频和字幕
+    
+    Args:
+        api_url: API 服务器地址
+        story_item: 单个故事数据对象
+        output_dir: 输出目录
+        output_index: 输出文件编号（用于命名）
+    
+    Returns:
+        是否成功
+    """
+    # 确保输出目录存在
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    
+    # 准备请求数据
+    request_body = {
+        "story_data": story_item
+    }
+    
+    # 调用 API
+    print(f">> 调用 API: {api_url}/generate_story_audio_single")
+    print(f">> 处理条目 {output_index}: {story_item.get('text', '')[:50]}...")
+    
+    try:
+        response = requests.post(
+            f"{api_url}/generate_story_audio_single",
+            json=request_body,
+            headers={"Content-Type": "application/json"},
+            timeout=600  # 10分钟超时
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            
+            if result.get("status") == "success":
+                # 保存音频文件
+                audio_base64 = result['audio']
+                audio_bytes = base64.b64decode(audio_base64)
+                
+                # 生成输出文件名
+                audio_output_path = Path(output_dir) / f"{output_index}.wav"
+                subtitle_output_path = Path(output_dir) / f"{output_index}_subtitles.json"
+                
+                # 保存音频
+                with open(audio_output_path, 'wb') as f:
+                    f.write(audio_bytes)
+                print(f"   ✓ 音频已保存: {audio_output_path}")
+                
+                # 保存字幕（JSON 格式）
+                subtitles = result['subtitles']
+                with open(subtitle_output_path, 'w', encoding='utf-8') as f:
+                    json.dump(subtitles, f, ensure_ascii=False, indent=2)
+                print(f"   ✓ 字幕已保存: {subtitle_output_path}")
+                
+                return True
+            else:
+                print(f"   ✗ API 返回错误: {result.get('error', '未知错误')}")
+                return False
+        else:
+            print(f"   ✗ HTTP 错误: {response.status_code}")
+            try:
+                error_data = response.json()
+                print(f"   错误信息: {error_data.get('error', response.text)}")
+            except:
+                print(f"   响应内容: {response.text[:500]}")
+            return False
+            
+    except requests.exceptions.Timeout:
+        print(f"   ✗ 请求超时")
+        return False
+    except requests.exceptions.ConnectionError:
+        print(f"   ✗ 无法连接到 API 服务器: {api_url}")
+        return False
+    except Exception as ex:
+        print(f"   ✗ 发生错误: {str(ex)}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def generate_story_audio_single_batch(
+    api_url: str,
+    json_file_path: str,
+    output_dir: str = "outputs",
+    item_count: int = 5,
+    case_name: str = "single_batch"
+):
+    """
+    批量调用单个故事条目 API，依次处理前N个条目
+    
+    Args:
+        api_url: API 服务器地址
+        json_file_path: 故事 JSON 文件路径
+        output_dir: 输出目录
+        item_count: 要处理的条目数量（前N个）
+        case_name: 测试用例名称（用于输出文件命名）
+    """
+    # 确保输出目录存在
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    
+    # 读取 JSON 文件
+    print(f">> 读取 JSON 文件: {json_file_path}")
+    with open(json_file_path, 'r', encoding='utf-8') as f:
+        story_data = json.load(f)
+    
+    if not isinstance(story_data, list):
+        print(f"✗ 错误: JSON 文件必须是数组格式")
+        return False
+    
+    # 获取前N个条目
+    items_to_process = story_data[:item_count]
+    total_items = len(story_data)
+    
+    print(f">> 文件中共有 {total_items} 个条目，将处理前 {len(items_to_process)} 个")
+    print(f">> 输出目录: {output_dir}")
+    print(f">> 开始批量处理...\n")
+    
+    # 记录开始时间
+    start_time = time.time()
+    
+    # 依次处理每个条目
+    success_count = 0
+    failed_count = 0
+    
+    for idx, item in enumerate(items_to_process, 1):
+        print(f"\n[{idx}/{len(items_to_process)}] 处理条目 {idx}")
+        success = generate_story_audio_single_api(
+            api_url=api_url,
+            story_item=item,
+            output_dir=output_dir,
+            output_index=idx
+        )
+        
+        if success:
+            success_count += 1
+        else:
+            failed_count += 1
+    
+    # 记录结束时间
+    elapsed_time = time.time() - start_time
+    
+    # 显示总结
+    print(f"\n" + "=" * 80)
+    print(f"批量处理完成")
+    print("=" * 80)
+    print(f"   - 总条目数: {len(items_to_process)}")
+    print(f"   - 成功: {success_count} 个 ✓")
+    print(f"   - 失败: {failed_count} 个 ✗")
+    print(f"   - 执行时间: {elapsed_time:.2f} 秒")
+    print(f"   - 平均每个条目: {elapsed_time/len(items_to_process):.2f} 秒")
+    print(f"\n>> 所有文件已保存到: {output_dir}/")
+    
+    return failed_count == 0
+
+
 def run_test_case(test_case: dict, api_url: str, output_dir: str) -> bool:
     """
     运行单个测试用例
@@ -325,6 +496,7 @@ def run_test_case(test_case: dict, api_url: str, output_dir: str) -> bool:
     json_file = test_case['json_file']
     voice_map = test_case.get('voice_map')
     use_json_api = test_case.get('use_json_api', False)
+    use_single_api = test_case.get('use_single_api', False)
     
     if not Path(json_file).exists():
         print(f"✗ 错误: JSON 文件不存在: {json_file}")
@@ -336,7 +508,14 @@ def run_test_case(test_case: dict, api_url: str, output_dir: str) -> bool:
     
     # 显示配置信息
     print(f"\n配置信息:")
-    print(f"  - API 类型: {'JSON 直接调用' if use_json_api else '文件上传'}")
+    if use_single_api:
+        api_type = "单个条目批量调用"
+        item_count = test_case.get('item_count', 5)
+        print(f"  - API 类型: {api_type}")
+        print(f"  - 处理条目数: {item_count}")
+    else:
+        api_type = 'JSON 直接调用' if use_json_api else '文件上传'
+        print(f"  - API 类型: {api_type}")
     print(f"  - JSON 文件: {json_file}")
     print(f"  - 音色映射: {voice_map if voice_map else '未使用（使用默认映射）'}")
     print(f"  - 输出目录: {output_dir}")
@@ -345,7 +524,17 @@ def run_test_case(test_case: dict, api_url: str, output_dir: str) -> bool:
     start_time = time.time()
     
     # 根据配置选择调用方式
-    if use_json_api:
+    if use_single_api:
+        # 使用单个条目批量调用方式
+        item_count = test_case.get('item_count', 5)
+        success = generate_story_audio_single_batch(
+            api_url=api_url,
+            json_file_path=json_file,
+            output_dir=output_dir,
+            item_count=item_count,
+            case_name=test_case['output_suffix']
+        )
+    elif use_json_api:
         # 使用 JSON 直接调用方式
         success = generate_story_audio_json_api(
             api_url=api_url,
@@ -475,7 +664,14 @@ def main():
         for idx, test_case in enumerate(TEST_CASES, 1):
             print(f"\n{idx}. {test_case['name']}")
             print(f"   描述: {test_case['description']}")
-            print(f"   API 类型: {'JSON 直接调用' if test_case.get('use_json_api', False) else '文件上传'}")
+            if test_case.get('use_single_api', False):
+                api_type = "单个条目批量调用"
+                item_count = test_case.get('item_count', 5)
+                print(f"   API 类型: {api_type}")
+                print(f"   处理条目数: {item_count}")
+            else:
+                api_type = 'JSON 直接调用' if test_case.get('use_json_api', False) else '文件上传'
+                print(f"   API 类型: {api_type}")
             print(f"   JSON: {test_case['json_file']}")
             print(f"   音色映射: {test_case.get('voice_map', '无')}")
         return

@@ -416,6 +416,46 @@ async def tts_api_url(request: Request):
         )
 
 
+def _subtitles_to_srt_string(subtitles: list) -> str:
+    """
+    将字幕数组转换为 SRT 格式字符串
+    
+    参数：
+    - subtitles: 字幕数据列表，每个元素包含 start, end, text, speaker 等字段
+    
+    返回：
+    - str: SRT 格式的字幕字符串
+    """
+    def format_time(milliseconds: float) -> str:
+        """将毫秒数转换为 SRT 时间格式 HH:MM:SS,mmm"""
+        total_seconds = milliseconds / 1000.0
+        hours = int(total_seconds // 3600)
+        minutes = int((total_seconds % 3600) // 60)
+        secs = int(total_seconds % 60)
+        millis = int(milliseconds % 1000)
+        return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+    
+    srt_lines = []
+    for idx, subtitle in enumerate(subtitles, 1):
+        start_time = format_time(subtitle['start'])
+        end_time = format_time(subtitle['end'])
+        
+        # 添加说话人信息（如果有）
+        speaker = subtitle.get('speaker', '')
+        text = subtitle['text']
+        if speaker and speaker != "旁白":
+            subtitle_text = f"[{speaker}] {text}"
+        else:
+            subtitle_text = text
+        
+        srt_lines.append(f"{idx}")
+        srt_lines.append(f"{start_time} --> {end_time}")
+        srt_lines.append(subtitle_text)
+        srt_lines.append("")  # 空行分隔
+    
+    return "\n".join(srt_lines)
+
+
 async def _process_story_audio_generation(story_data: list, custom_voice_map: Optional[list] = None) -> dict:
     """
     核心音频生成逻辑（内部函数）
@@ -960,6 +1000,111 @@ async def generate_story_audio_json(request: Request):
         # 调用核心生成逻辑
         result = await _process_story_audio_generation(story_data, custom_voice_map)
         return JSONResponse(status_code=200, content=result)
+    
+    except ValueError as ve:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "error": str(ve)
+            }
+        )
+    except Exception as ex:
+        tb_str = ''.join(traceback.format_exception(type(ex), ex, ex.__traceback__))
+        print(f">> 错误: {tb_str}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "error": str(tb_str)
+            }
+        )
+
+
+@app.post("/generate_story_audio_single", responses={
+    200: {"content": {"application/json": {}}},
+    400: {"content": {"application/json": {}}},
+    500: {"content": {"application/json": {}}}
+})
+async def generate_story_audio_single(request: Request):
+    """
+    生成单个故事音频和字幕（直接 JSON 方式）
+    
+    直接发送单个故事数据对象，生成合成的语音和字幕。
+    
+    请求体格式：
+    {
+        "story_data": {
+            "type": "c",  // 文本类型：s=故事情节, m=心理活动, c=人物对话, t=标题, unknown=未知
+            "text": "我要再去西漠。",  // 要转成语音的文本
+            "sex": "wo",  // 性别：man=男, wo=女, unknown=未知
+            "name": "安妙依",  // 人物名
+            "emotion": null  // 情绪状态：happy, sad, angry, afraid, disgusted, surprised, calm, fearful 等
+        }
+    }
+    
+    返回：
+    - status (string): 状态 "success" 或 "error"
+    - audio (string): base64 编码的合成音频（WAV 格式）
+    - audio_format (string): 音频格式
+    - sample_rate (int): 采样率
+    - subtitles (array): 字幕数据（JSON 数组格式）
+    - subtitle_count (int): 字幕条目数量
+    - total_duration (float): 总时长（毫秒）
+    """
+    try:
+        # 解析请求体
+        try:
+            body = await request.json()
+        except json.JSONDecodeError as e:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "error": f"JSON 解析失败: {str(e)}"
+                }
+            )
+        
+        # 获取故事数据
+        story_data = body.get("story_data")
+        if not story_data:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "error": "缺少 story_data 字段"
+                }
+            )
+        
+        # 验证 story_data 是否为字典格式（单个对象）
+        if not isinstance(story_data, dict):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "error": "story_data 必须是对象格式"
+                }
+            )
+        
+        # 将单个对象转换为数组格式
+        story_data_list = [story_data]
+        
+        # 调用核心生成逻辑
+        result = await _process_story_audio_generation(story_data_list, None)
+        
+        # 构建返回结果（直接返回字幕数组，不转换为 SRT）
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": result.get("status", "success"),
+                "audio": result.get("audio"),
+                "audio_format": result.get("audio_format"),
+                "sample_rate": result.get("sample_rate"),
+                "subtitles": result.get("subtitles", []),
+                "subtitle_count": result.get("subtitle_count", 0),
+                "total_duration": result.get("total_duration", 0.0)
+            }
+        )
     
     except ValueError as ve:
         return JSONResponse(
