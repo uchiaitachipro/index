@@ -39,7 +39,7 @@ TEST_CASES = [
         "name": "单个条目批量测试",
         "description": "依次调用 generate_story_audio_single API 处理前N个条目",
         "json_file": "examples/role_778_True.json",
-        "item_count": 3,  # 处理前5个条目
+        "item_count": 112,  # 处理前5个条目
         "output_suffix": "single_batch",
         "use_single_api": True
     },
