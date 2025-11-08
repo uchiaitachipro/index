@@ -18,6 +18,7 @@ import numpy as np
 from glob import glob
 
 from indextts.infer_v2_subtitle import IndexTTS2SubTitle
+from audio_detect_noise_v2 import detect_chi_noise_core, detect_chi_noise
 
 tts = None
 api_verbose = False
@@ -30,15 +31,15 @@ SPEAKER_AUDIO_DIRS = [
 
 # 默认说话人音频映射（可根据实际情况修改）
 DEFAULT_SPEAKER_MAP = {
-    ("man", "叶凡"): "fanqie_man_main_role_12x.mp3",
-    ("wo", "安妙依"): "fanqie_woman_yaorao_12x.mp3",
-    ("woman", "安妙依"): "fanqie_woman_yaorao_12x.mp3",
-    ("wo", "姬紫月"): "minmax_young_girl_12x.mp3",
-     ("woman", "姬紫月"): "minmax_young_girl_12x.mp3",
-    ("man", "default"): "minmax_yongth_qingche_12x.mp3",
-    ("wo", "default"): "minmax_yongth_qingche_12x.mp3",
-    ("woman", "default"): "minmax_yongth_qingche_12x.mp3",
-    ("unknown", "default"): "fanqie_speaker_default_12x.mp3"
+    ("man", "叶凡"): "minmax_shulang_man_2dot6_1x.mp3",
+    ("wo", "安妙依"): "minmax_soft_girl_2dot6_1x.mp3",
+    ("woman", "安妙依"): "minmax_soft_girl_2dot6_1x.mp3",
+    # ("wo", "姬紫月"): "minmax_young_girl_12x.mp3",
+    #  ("woman", "姬紫月"): "minmax_young_girl_12x.mp3",
+    # ("man", "default"): "minmax_yongth_qingche_12x.mp3",
+    # ("wo", "default"): "minmax_yongth_qingche_12x.mp3",
+    # ("woman", "default"): "minmax_yongth_qingche_12x.mp3",
+    ("unknown", "default"): "fanqie_speaker_1x.mp3"
 }
 
 def find_speaker_audio(sex: str, name: str) -> Optional[str]:
@@ -358,29 +359,73 @@ async def tts_api_url(request: Request):
         print(f"Emo control mode:{emo_control_method},vec:{vec},return_subtitle:{return_subtitle}")
         global api_verbose
         
-        # 调用 TTS 推理（在线程池中运行，避免阻塞事件循环）
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,  # 使用默认线程池
-            lambda: tts.infer(
-                spk_audio_prompt=spk_audio_path, 
-                text=text,
-                output_path=None,
-                emo_audio_prompt=emo_ref_path, 
-                emo_alpha=emo_weight,
-                emo_vector=vec,
-                use_emo_text=(emo_control_method==3), 
-                emo_text=emo_text,
-                use_random=emo_random,
-                max_text_tokens_per_segment=int(max_text_tokens_per_sentence),
-                verbose=api_verbose
-            )
-        )
+        # TTS 推理并检测杂音，最多重试3次
+        max_retries = 3
+        result = None
+        audio_data = None
+        sr = None
+        wav = None
+        subtitles = []
         
-        # 解析返回结果（IndexTTS2SubTitle 总是返回字典格式）
-        audio_data = result['audio_data']
-        sr, wav = audio_data
-        subtitles = result.get('subtitles', [])
+        loop = asyncio.get_event_loop()
+        
+        for retry_count in range(max_retries):
+            # 调用 TTS 推理（在线程池中运行，避免阻塞事件循环）
+            def infer_tts():
+                return tts.infer(
+                    spk_audio_prompt=spk_audio_path, 
+                    text=text,
+                    output_path=None,
+                    emo_audio_prompt=emo_ref_path, 
+                    emo_alpha=emo_weight,
+                    emo_vector=vec,
+                    use_emo_text=(emo_control_method==3), 
+                    emo_text=emo_text,
+                    use_random=emo_random,
+                    max_text_tokens_per_segment=int(max_text_tokens_per_sentence),
+                    verbose=api_verbose
+                )
+            
+            result = await loop.run_in_executor(None, infer_tts)
+            
+            # 解析返回结果（IndexTTS2SubTitle 总是返回字典格式）
+            audio_data = result['audio_data']
+            sr, wav = audio_data
+            subtitles = result.get('subtitles', [])
+            
+            # 检测杂音
+            try:
+                noise_result = detect_chi_noise_core(wav, sr)
+                has_noise = noise_result.get('has_chi', False)
+                
+                if not has_noise:
+                    # 没有杂音，直接使用
+                    if retry_count > 0:
+                        print(f">> 第 {retry_count + 1} 次生成成功，无杂音")
+                    break
+                else:
+                    # 检测到杂音
+                    if retry_count < max_retries - 1:
+                        print(f">> 警告: 第 {retry_count + 1} 次生成检测到杂音 (score={noise_result.get('score', 0):.2f}, "
+                              f"ratio={noise_result.get('ratio_db_peak', 0):.2f}dB)，准备重试...")
+                        # 短暂等待后重试
+                        await asyncio.sleep(0.5)
+                    else:
+                        # 最后一次重试仍有问题，输出日志并使用最后一次生成的音频
+                        print(f">> 错误: 经过 {max_retries} 次重试后仍检测到杂音，使用最后一次生成的音频")
+                        print(f">>   杂音检测详情: score={noise_result.get('score', 0):.2f}, "
+                              f"ratio={noise_result.get('ratio_db_peak', 0):.2f}dB, "
+                              f"flux={noise_result.get('flux_db_peak', 0):.2f}dB")
+                        # 使用最后一次生成的音频（当前 audio_data 就是最后一次的）
+                        break
+            except Exception as detect_error:
+                # 检测过程出错，记录但继续使用当前音频
+                print(f">> 警告: 杂音检测失败: {str(detect_error)}，使用当前生成的音频")
+                break
+        
+        # 确保有音频数据
+        if result is None or audio_data is None:
+            raise RuntimeError("TTS 推理失败，无法生成音频")
         
         # 生成音频字节流
         with io.BytesIO() as wav_buffer:
@@ -484,6 +529,7 @@ async def _process_story_audio_generation(story_data: list, custom_voice_map: Op
     current_time = 0.0  # 单位：毫秒
     processed_count = 0
     skipped_count = 0
+    segment_noise_results = []  # 记录每个片段的杂音检测结果
     
     # 静音间隔配置（毫秒）
     silence_interval_ms = 80.0  # 80ms 静音间隔（从50ms增加以减少杂音）
@@ -573,7 +619,7 @@ async def _process_story_audio_generation(story_data: list, custom_voice_map: Op
         
         print(f"  [{idx+1}/{len(story_data)}] 处理: type={item_type}, name={name}, text={text[:30]}...")
         
-        # 调用 TTS 生成音频（在线程池中运行，失败时最多重试 3 次）
+        # 调用 TTS 生成音频（在线程池中运行，失败或检测到杂音时最多重试 3 次）
         max_retries = 3
         success = False
         last_error = None
@@ -585,9 +631,8 @@ async def _process_story_audio_generation(story_data: list, custom_voice_map: Op
                     # 重试前短暂等待
                     await asyncio.sleep(1)
                 
-                result = await loop.run_in_executor(
-                    None,
-                    lambda: tts.infer(
+                def infer_tts():
+                    return tts.infer(
                         spk_audio_prompt=spk_audio_path,
                         text=text,
                         output_path=None,
@@ -598,13 +643,65 @@ async def _process_story_audio_generation(story_data: list, custom_voice_map: Op
                         max_text_tokens_per_segment=120,
                         verbose=api_verbose
                     )
-                )
+                
+                result = await loop.run_in_executor(None, infer_tts)
                 
                 # 解析结果
                 audio_data = result['audio_data']
                 sr, wav = audio_data
                 subtitles = result.get('subtitles', [])
                 
+                # 检测杂音
+                segment_has_noise = False
+                segment_noise_score = 0.0
+                try:
+                    # 使用 AudioSegment 导出字节数组，然后调用 detect_chi_noise 检测
+                    # 这样可以避免类型转换问题，detect_chi_noise 会自动处理字节数组
+                    from pydub import AudioSegment
+                    with io.BytesIO() as buffer:
+                        sf.write(buffer, wav, sr, format='WAV')
+                        buffer.seek(0)
+                        audio_segment = AudioSegment.from_wav(buffer)
+                    
+                    # 导出为 WAV 字节数组
+                    with io.BytesIO() as wav_buffer:
+                        audio_segment.export(wav_buffer, format="wav")
+                        wav_bytes = wav_buffer.getvalue()
+                    
+                    # 调用 detect_chi_noise 检测（支持 bytes 输入）
+                    noise_result = detect_chi_noise(wav_bytes)
+                    has_noise = noise_result.get('has_chi', False)
+                    segment_has_noise = has_noise
+                    segment_noise_score = noise_result.get('score', 0.0)
+                    
+                    if has_noise:
+                        # 检测到杂音
+                        if retry < max_retries - 1:
+                            # 还有重试机会，抛出异常触发重试
+                            raise ValueError(f"检测到杂音 (score={noise_result.get('score', 0):.2f}, "
+                                           f"ratio={noise_result.get('ratio_db_peak', 0):.2f}dB)")
+                        else:
+                            # 最后一次重试仍有问题，输出日志并使用最后一次生成的音频（当前 audio_data）
+                            print(f"    错误: 条目 {idx+1} 经过 {max_retries} 次重试后仍检测到杂音，使用最后一次生成的音频")
+                            print(f"      杂音检测详情: score={noise_result.get('score', 0):.2f}, "
+                                  f"ratio={noise_result.get('ratio_db_peak', 0):.2f}dB, "
+                                  f"flux={noise_result.get('flux_db_peak', 0):.2f}dB")
+                            print(f"      文本: {text[:50]}...")
+                            # 使用当前生成的音频（已经是最后一次的）
+                except ValueError as noise_error:
+                    # 杂音检测失败，重新抛出以触发重试
+                    raise
+                except Exception as detect_error:
+                    # 检测过程出错，记录但继续使用当前音频
+                    print(f"    警告: 杂音检测失败: {str(detect_error)}，使用当前生成的音频")
+                
+                # 记录当前片段的杂音检测结果
+                segment_noise_results.append({
+                    'has_noise': segment_has_noise,
+                    'score': segment_noise_score
+                })
+                
+                # 音频生成成功且无杂音（或检测失败但继续使用），处理音频
                 # 计算当前音频片段时长（毫秒）
                 segment_duration = len(wav) / sr * 1000.0
                 
@@ -645,7 +742,11 @@ async def _process_story_audio_generation(story_data: list, custom_voice_map: Op
             except Exception as ex:
                 last_error = ex
                 if retry < max_retries - 1:
-                    print(f"    警告: 生成失败 ({str(ex)}), 准备重试...")
+                    error_msg = str(ex)
+                    if "检测到杂音" in error_msg:
+                        print(f"    警告: {error_msg}，准备重试...")
+                    else:
+                        print(f"    警告: 生成失败 ({error_msg}), 准备重试...")
                 continue
         
         # 如果所有重试都失败
@@ -703,59 +804,17 @@ async def _process_story_audio_generation(story_data: list, custom_voice_map: Op
             print(f"   使用 pydub 合成: {len(all_audio_segments)} 个片段，总时长 {len(combined)}ms")
             
     except ImportError:
-        # 如果没有 pydub，使用简化的 numpy 方式作为降级方案
-        if api_verbose:
-            print(f"   pydub 不可用，使用 NumPy 合成")
-        
-        audio_arrays = []
-        silence_duration = silence_interval_ms / 1000.0
-        silence_samples = int(final_sr * silence_duration)
-        silence_np = np.zeros(silence_samples, dtype=np.float32)
-        
-        fade_samples = int(final_sr * 0.01)  # 10ms 淡入淡出
-        
-        for idx, (sr, wav) in enumerate(all_audio_segments):
-            # 展平
-            if wav.ndim > 1:
-                wav = wav.flatten()
-            
-            # 重采样
-            if sr != final_sr:
-                ratio = final_sr / sr
-                new_length = int(len(wav) * ratio)
-                wav = np.interp(
-                    np.linspace(0, len(wav), new_length),
-                    np.arange(len(wav)),
-                    wav
-                )
-            
-            wav = wav.astype(np.float32)
-            
-            # 简单淡入淡出
-            if len(wav) > fade_samples * 2:
-                fade_in = np.linspace(0, 1, fade_samples, dtype=np.float32)
-                wav[:fade_samples] *= fade_in
-                fade_out = np.linspace(1, 0, fade_samples, dtype=np.float32)
-                wav[-fade_samples:] *= fade_out
-            
-            audio_arrays.append(wav)
-            
-            # 添加静音
-            if idx < len(all_audio_segments) - 1:
-                audio_arrays.append(silence_np)
-        
-        # 合并
-        final_audio = np.concatenate(audio_arrays)
-        
-        # 归一化
-        max_val = np.abs(final_audio).max()
-        if max_val > 0:
-            final_audio = final_audio * (0.95 / max_val)
-        
-        # 生成音频字节流
-        with io.BytesIO() as wav_buffer:
-            sf.write(wav_buffer, final_audio, final_sr, format='WAV')
-            wav_bytes = wav_buffer.getvalue()
+        # 如果没有 pydub，抛出错误
+        raise ImportError("pydub 不可用，无法合并音频片段")
+    
+    # 检测最终合并音频的杂音（直接使用片段检测结果）
+    # 如果有一个片段有杂音，就认为最终音频也有杂音
+    segments_with_noise = [r for r in segment_noise_results if r.get('has_noise', False)]
+    has_noise = len(segments_with_noise) > 0
+    
+    if has_noise:
+        noise_count = len(segments_with_noise)
+        print(f">> 警告: 检测到 {noise_count} 个片段包含杂音，最终音频标记为有杂音")
     
     # 编码为 base64
     audio_base64 = base64.b64encode(wav_bytes).decode('utf-8')
@@ -772,6 +831,7 @@ async def _process_story_audio_generation(story_data: list, custom_voice_map: Op
         "processed_items": processed_count,
         "skipped_items": skipped_count,
         "total_duration": current_time,
+        "has_noise": has_noise,
         "message": f"成功生成 {processed_count} 个音频片段，总时长 {current_time/1000:.2f} 秒"
     }
 
@@ -1102,7 +1162,8 @@ async def generate_story_audio_single(request: Request):
                 "sample_rate": result.get("sample_rate"),
                 "subtitles": result.get("subtitles", []),
                 "subtitle_count": result.get("subtitle_count", 0),
-                "total_duration": result.get("total_duration", 0.0)
+                "total_duration": result.get("total_duration", 0.0),
+                "has_noise": result.get("has_noise", False)
             }
         )
     

@@ -12,9 +12,33 @@ import argparse
 from pathlib import Path
 import time
 from datetime import datetime
+from audio_detect_noise_v2 import detect_chi_noise_core, detect_chi_noise
 
 USE_LOCAL = False
 BASE_URL = "http://localhost:6006" if USE_LOCAL else "http://117.50.190.136:6006"
+
+# ANSI 颜色代码
+class Colors:
+    RED = '\033[31m'
+    GREEN = '\033[32m'
+    YELLOW = '\033[33m'
+    BLUE = '\033[34m'
+    MAGENTA = '\033[35m'
+    CYAN = '\033[36m'
+    RESET = '\033[0m'  # 重置颜色
+    BOLD = '\033[1m'
+
+def print_red(text):
+    """打印红色文本"""
+    print(f"{Colors.RED}{text}{Colors.RESET}")
+
+def print_green(text):
+    """打印绿色文本"""
+    print(f"{Colors.GREEN}{text}{Colors.RESET}")
+
+def print_yellow(text):
+    """打印黄色文本"""
+    print(f"{Colors.YELLOW}{text}{Colors.RESET}")
 
 
 # 测试用例配置
@@ -373,6 +397,20 @@ def generate_story_audio_single_api(
                 with open(subtitle_output_path, 'w', encoding='utf-8') as f:
                     json.dump(subtitles, f, ensure_ascii=False, indent=2)
                 print(f"   ✓ 字幕已保存: {subtitle_output_path}")
+                
+                # 杂音检测结果（有杂音显示红色，无杂音显示绿色）
+                has_noise = result.get('has_noise', False)
+                if has_noise:
+                    print(f"   {Colors.RED}⚠ 杂音检测结果: {has_noise}{Colors.RESET}")
+                else:
+                    print(f"   {Colors.GREEN}✓ 杂音检测结果: {has_noise}{Colors.RESET}")
+                
+
+                local_detect = detect_chi_noise(audio_output_path)
+                if has_noise != local_detect.get('has_chi', False):
+                    print(f"   {Colors.RED}⚠ 杂音检测结果不一致: {has_noise} != {local_detect.get('has_chi', False)}{Colors.RESET}")
+                else:
+                    print(f"   {Colors.GREEN}✓ 杂音检测结果一致: {has_noise} == {local_detect.get('has_chi', False)}{Colors.RESET}")
                 
                 return True
             else:
