@@ -34,11 +34,11 @@ DEFAULT_SPEAKER_MAP = {
     ("man", "叶凡"): "minmax_shulang_man_2dot6_1x.mp3",
     ("wo", "安妙依"): "minmax_soft_girl_2dot6_1x.mp3",
     ("woman", "安妙依"): "minmax_soft_girl_2dot6_1x.mp3",
-    # ("wo", "姬紫月"): "minmax_young_girl_12x.mp3",
-    #  ("woman", "姬紫月"): "minmax_young_girl_12x.mp3",
-    # ("man", "default"): "minmax_yongth_qingche_12x.mp3",
-    # ("wo", "default"): "minmax_yongth_qingche_12x.mp3",
-    # ("woman", "default"): "minmax_yongth_qingche_12x.mp3",
+    ("wo", "姬紫月"): "minmax_warm_girl_2dot6_1x.mp3",
+    ("woman", "姬紫月"): "minmax_warm_girl_2dot6_1x.mp3",
+    ("man", "default"): "minmax_unrestrained_young_man_2dot6_1x.mp3",
+    ("wo", "default"): "minmax_arrogant_girl_2dot6_1x.mp3",
+    ("woman", "default"): "minmax_arrogant_girl_2dot6_1x.mp3",
     ("unknown", "default"): "fanqie_speaker_1x.mp3"
 }
 
