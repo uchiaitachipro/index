@@ -505,7 +505,7 @@ async def _process_story_audio_generation(story_data: list, custom_voice_map: Op
                         "pronounce_text": subtitle["pronounce_text"],
                         "speaker": name if name else "旁白",
                         "type": item_type,
-                        "emotion": emotion
+                        "emotion": emotion if emotion else "unknown"
                     }
                     all_subtitles.append(adjusted_subtitle)
                 
@@ -763,17 +763,36 @@ async def generate_story_audio_single(request: Request):
             "sex": "wo",  // 性别：man=男, wo=女, unknown=未知
             "name": "安妙依",  // 人物名
             "emotion": null  // 情绪状态：happy, sad, angry, afraid, disgusted, surprised, calm, fearful 等
+        },
+        "voice_map": [  // 可选：自定义音色映射
+            {
+                "name": "叶凡",
+                "sex": "man",
+                "emotion": "happy",
+                "voice_id": "/uploads/speakers/ye_fan_happy.mp3"
+            },
+        ]
         }
     }
     
     返回：
-    - status (string): 状态 "success" 或 "error"
-    - audio (string): base64 编码的合成音频（WAV 格式）
-    - audio_format (string): 音频格式
-    - sample_rate (int): 采样率
-    - subtitles (array): 字幕数据（JSON 数组格式）
-    - subtitle_count (int): 字幕条目数量
-    - total_duration (float): 总时长（毫秒）
+    {
+        "data": {
+            "audio_base64": "base64_encoded_audio_data",
+            "status": 2
+        },
+        "extra_info": {
+            "audio_length": 10000,
+            "audio_sample_rate": 22050,
+            "audio_format": "wav",
+            "audio_channel": 1,
+            "has_noise": False
+        },
+        "base_resp": {
+            "status_code": 0,
+            "status_msg": "success"
+        },
+        "subtitles": [...字幕数据...]
     """
     try:
         # 解析请求体
@@ -808,25 +827,49 @@ async def generate_story_audio_single(request: Request):
                     "error": "story_data 必须是对象格式"
                 }
             )
+
+        # 获取自定义音色映射（可选）
+        custom_voice_map = body.get("voice_map")
+        if custom_voice_map:
+            if not isinstance(custom_voice_map, list):
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "status": "error",
+                        "error": "voice_map 必须是数组格式"
+                    }
+                )
+            print(f">> 使用自定义音色映射，共 {len(custom_voice_map)} 条规则")
         
         # 将单个对象转换为数组格式
         story_data_list = [story_data]
         
         # 调用核心生成逻辑
-        result = await _process_story_audio_generation(story_data_list, None)
+        result = await _process_story_audio_generation(story_data_list, custom_voice_map)
         
-        # 构建返回结果（直接返回字幕数组，不转换为 SRT）
+        # 构建返回结果（新格式）
+        # 状态映射：success -> 2
+        status_code = 2 if result.get("status", "success") == "success" else 1
+        
         return JSONResponse(
             status_code=200,
             content={
-                "status": result.get("status", "success"),
-                "audio": result.get("audio"),
-                "audio_format": result.get("audio_format"),
-                "sample_rate": result.get("sample_rate"),
-                "subtitles": result.get("subtitles", []),
-                "subtitle_count": result.get("subtitle_count", 0),
-                "total_duration": result.get("total_duration", 0.0),
-                "has_noise": result.get("has_noise", False)
+                "data": {
+                    "audio_base64": result.get("audio", ""),
+                    "status": 2 #1 表示合成中，2 表示合成结束
+                },
+                "extra_info": {
+                    "audio_length": int(result.get("total_duration", 0.0)),
+                    "audio_sample_rate": result.get("sample_rate", 32000),
+                    "audio_format": result.get("audio_format", "wav"),
+                    "audio_channel": 1,  # TTS 生成单声道音频
+                    "has_noise": result.get("has_noise", False)
+                },
+                "base_resp": {
+                    "status_code": 0,
+                    "status_msg": "success"
+                },
+                "subtitles": result.get("subtitles", [])
             }
         )
     

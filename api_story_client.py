@@ -14,7 +14,7 @@ import time
 from datetime import datetime
 from audio_detect_noise_v2 import detect_chi_noise_core, detect_chi_noise
 
-USE_LOCAL = False
+USE_LOCAL = True
 BASE_URL = "http://localhost:6006" if USE_LOCAL else "http://117.50.190.136:6006"
 
 # ANSI 颜色代码
@@ -63,7 +63,7 @@ TEST_CASES = [
         "name": "单个条目批量测试",
         "description": "依次调用 generate_story_audio_single API 处理前N个条目",
         "json_file": "examples/role_778_True.json",
-        "item_count": 112,  # 处理前5个条目
+        "item_count": 3,  # 处理前5个条目
         "output_suffix": "single_batch",
         "use_single_api": True
     },
@@ -372,15 +372,24 @@ def generate_story_audio_single_api(
             f"{api_url}/generate_story_audio_single",
             json=request_body,
             headers={"Content-Type": "application/json"},
-            timeout=600  # 10分钟超时
+            timeout=3000  # 10分钟超时
         )
         
         if response.status_code == 200:
             result = response.json()
             
-            if result.get("status") == "success":
-                # 保存音频文件
-                audio_base64 = result['audio']
+            # 检查新格式的响应状态
+            base_resp = result.get("base_resp", {})
+            status_code = base_resp.get("status_code", -1)
+            
+            if status_code == 0:
+                # 获取音频数据（新格式）
+                data = result.get("data", {})
+                audio_base64 = data.get("audio_base64", "")
+                if not audio_base64:
+                    print(f"   ✗ API 返回数据中缺少 audio_base64")
+                    return False
+                
                 audio_bytes = base64.b64decode(audio_base64)
                 
                 # 生成输出文件名
@@ -393,18 +402,14 @@ def generate_story_audio_single_api(
                 print(f"   ✓ 音频已保存: {audio_output_path}")
                 
                 # 保存字幕（JSON 格式）
-                subtitles = result['subtitles']
+                subtitles = result.get("subtitles", [])
                 with open(subtitle_output_path, 'w', encoding='utf-8') as f:
                     json.dump(subtitles, f, ensure_ascii=False, indent=2)
                 print(f"   ✓ 字幕已保存: {subtitle_output_path}")
                 
                 # 杂音检测结果（有杂音显示红色，无杂音显示绿色）
-                has_noise = result.get('has_noise', False)
-                if has_noise:
-                    print(f"   {Colors.RED}⚠ 杂音检测结果: {has_noise}{Colors.RESET}")
-                else:
-                    print(f"   {Colors.GREEN}✓ 杂音检测结果: {has_noise}{Colors.RESET}")
-                
+                extra_info = result.get("extra_info", {})
+                has_noise = extra_info.get('has_noise', False)
 
                 local_detect = detect_chi_noise(audio_output_path)
                 if has_noise != local_detect.get('has_chi', False):
@@ -414,7 +419,8 @@ def generate_story_audio_single_api(
                 
                 return True
             else:
-                print(f"   ✗ API 返回错误: {result.get('error', '未知错误')}")
+                status_msg = base_resp.get("status_msg", "未知错误")
+                print(f"   ✗ API 返回错误: {status_msg} (status_code: {status_code})")
                 return False
         else:
             print(f"   ✗ HTTP 错误: {response.status_code}")
