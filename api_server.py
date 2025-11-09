@@ -500,8 +500,8 @@ async def _process_story_audio_generation(story_data: list, custom_voice_map: Op
                 for subtitle in subtitles:
                     adjusted_subtitle = {
                         "text": subtitle["text"],
-                        "start": subtitle["time_begin"] + current_time,
-                        "end": subtitle["time_end"] + current_time,
+                        "time_begin": subtitle["time_begin"] + current_time,
+                        "time_end": subtitle["time_end"] + current_time,
                         "pronounce_text": subtitle["pronounce_text"],
                         "speaker": name if name else "旁白",
                         "type": item_type,
