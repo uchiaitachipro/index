@@ -19,10 +19,10 @@ def detect_chi_noise_core(y: np.ndarray,
                           ref_ms=300,            # 参考窗口（毫秒）
                           hi_band=(5000, 15000), # 高频频带范围（Hz）
                           ratio_db_thresh=5.5,   # 高频相对增益阈值（dB）
-                          ratio_db_min=10.0,     # 高频相对增益最低要求（dB），用于过滤弱信号
+                          ratio_db_min=6.0,      # 高频相对增益最低要求（dB），用于过滤弱信号（降低以捕获弱杂音）
                           flux_db_thresh=3.0,    # 瞬态变化阈值（dB）
                           score_thresh=4.0,      # 综合评分阈值（提高以减少误检）
-                          must_be_within_ms=150  # 杂音必须出现在结尾多少毫秒内
+                          must_be_within_ms=200  # 杂音必须出现在结尾多少毫秒内（放宽以捕获边缘情况）
                           ):
     """
     检测音频数据结尾是否存在 "chi" 杂音（核心检测逻辑）
@@ -113,7 +113,9 @@ def detect_chi_noise_core(y: np.ndarray,
     k_peak = int(np.argmax(ratio_db_seq))
     t0_global = len(y) - N_tail + int(k_peak * hop)
     distance_from_end = len(y) - t0_global
-    near_end = distance_from_end <= int((must_be_within_ms / 1000) * sr)
+    # 放宽边界判断，允许1个hop的误差
+    threshold_samples = int((must_be_within_ms / 1000) * sr)
+    near_end = distance_from_end <= threshold_samples + hop
     
     # 计算超阈值持续时间
     over_thresh = ratio_db_seq > ratio_db_thresh
@@ -129,17 +131,34 @@ def detect_chi_noise_core(y: np.ndarray,
     elif ratio_db_peak > ratio_db_thresh - 2.0:
         score += 1.0  # 接近阈值
     
+    # 如果ratio_db_peak刚好超过ratio_db_min，给予额外分数
+    if ratio_db_peak >= ratio_db_min and ratio_db_peak < ratio_db_min + 1.0:
+        score += 0.5  # 边缘情况额外加分
+    
     if flux_db_peak > flux_db_thresh:
         score += 1.5  # 瞬态变化明显
     elif flux_db_peak > flux_db_thresh - 1.0:
         score += 0.5
     
+    # 如果flux较低但crest很高，可能是瞬态杂音
+    if flux_db_peak < flux_db_thresh and crest_db > 15.0:
+        score += 0.5  # 补偿flux不足
+    
     # 次要指标（权重较低）
     if flat_db > -10.0:  # 频谱较平坦（可能是噪声）
         score += 0.5
     
+    # 如果flat_db太低（<-45），可能是语音而非杂音，降低分数
+    # 但需要结合ratio_db_peak判断：如果ratio很高，即使flat_db较低也可能是杂音
+    if flat_db < -45.0 and ratio_db_peak < 20.0:
+        score *= 0.5  # 大幅降低分数，过滤语音信号（但ratio很高时保留）
+    
     if rolloff_ratio > 0.75:  # 高频成分较多
         score += 0.5
+    
+    # 如果rolloff_ratio较低（<0.1），更可能是瞬态杂音
+    if rolloff_ratio < 0.1:
+        score += 0.3
     
     if crest_db > 12.0:  # 波峰因子较高（可能是瞬态杂音）
         score += 0.5
@@ -150,14 +169,29 @@ def detect_chi_noise_core(y: np.ndarray,
     if over_ms > 0 and over_ms < 150:  # 持续时间适中（不是持续噪声）
         score += 0.5
     
+    # 如果rolloff_ratio中等（0.3-0.5）且rms_ratio较高（>0.4），可能是语音尾音而非杂音
+    # 杂音通常rolloff_ratio很高（>0.6）或很低（<0.1），且rms_ratio较低（<0.3）
+    if 0.3 <= rolloff_ratio <= 0.5 and rms_ratio > 0.4:
+        score *= 0.6  # 降低分数，可能是语音尾音
+    
     # 必须靠近结尾
     if not near_end:
         score *= 0.3  # 如果不在结尾附近，大幅降低分数
     
+    # 对于ratio较低但其他指标较强的边缘情况，放宽限制
+    # 如果ratio在5-6dB之间，但flux和crest都很高，可能是弱杂音
+    if ratio_db_peak >= 5.0 and ratio_db_peak < ratio_db_min:
+        if flux_db_peak > flux_db_thresh and crest_db > 15.0:
+            # 弱杂音但特征明显，给予额外分数
+            score += 1.0
+    
     # 判定结果：必须满足最低 ratio 要求，且评分超过阈值，且靠近结尾
-    has_chi = (ratio_db_peak >= ratio_db_min and 
-               score >= score_thresh and 
-               near_end)
+    # 对于边缘情况（ratio在5-6dB之间），如果score足够高且near_end，也可以判定为有杂音
+    has_chi = (
+        (ratio_db_peak >= ratio_db_min and score >= score_thresh and near_end) or
+        (ratio_db_peak >= 5.0 and ratio_db_peak < ratio_db_min and 
+         score >= score_thresh + 1.0 and near_end and flux_db_peak > 0.3)
+    )
     
     return {
         "has_chi": bool(has_chi),
@@ -270,10 +304,10 @@ def detect_chi_noise(audio_input: Union[str, Path, bytes],
                      ref_ms=300,            # 参考窗口（毫秒）
                      hi_band=(5000, 15000), # 高频频带范围（Hz）
                      ratio_db_thresh=5.5,   # 高频相对增益阈值（dB）
-                     ratio_db_min=10.0,     # 高频相对增益最低要求（dB），用于过滤弱信号
+                     ratio_db_min=6.0,      # 高频相对增益最低要求（dB），用于过滤弱信号（降低以捕获弱杂音）
                      flux_db_thresh=3.0,    # 瞬态变化阈值（dB）
                      score_thresh=4.0,      # 综合评分阈值（提高以减少误检）
-                     must_be_within_ms=150  # 杂音必须出现在结尾多少毫秒内
+                     must_be_within_ms=200  # 杂音必须出现在结尾多少毫秒内（放宽以捕获边缘情况）
                      ):
     """
     检测音频文件结尾是否存在 "chi" 杂音（封装函数，自动处理文件读取）
@@ -391,10 +425,10 @@ if __name__ == "__main__":
         ref_ms=300,
         hi_band=(5000, 15000),
         ratio_db_thresh=5.5,
-        ratio_db_min=10.0,  # 最低要求，过滤弱信号
+        ratio_db_min=6.0,  # 降低以捕获弱杂音
         flux_db_thresh=3.0,
         score_thresh=4.0,  # 提高阈值以减少误检
-        must_be_within_ms=150
+        must_be_within_ms=200  # 放宽以捕获边缘情况
     )
     
     print("\n" + "=" * 80)
