@@ -374,7 +374,7 @@ if __name__ == "__main__":
     import sys
     
     # 默认检测 outputs 目录
-    test_dir = "./outputs"
+    test_dir = "./audio_noise_case"
     if len(sys.argv) > 1:
         test_dir = sys.argv[1]
     

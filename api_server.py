@@ -373,8 +373,8 @@ async def _process_story_audio_generation(story_data: list, custom_voice_map: Op
                 raise FileNotFoundError("无法找到任何说话人音频文件")
         
         # 如果使用了自定义音色映射，在 verbose 模式下显示匹配信息
-        if api_verbose and custom_voice_map:
-            print(f"    使用音色文件: {spk_audio_path}")
+        if custom_voice_map:
+            print(f"    使用自定义音色文件: {spk_audio_path}")
         
         # 准备情感参数
         emo_vec = [0] * 8
