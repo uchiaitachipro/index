@@ -10,7 +10,16 @@ import os
 import io
 import soundfile as sf
 from pathlib import Path
-from typing import List, Dict, Tuple, Union
+from typing import List, Dict, Tuple, Union, Optional
+import json
+
+# 尝试导入机器学习相关库
+try:
+    import joblib
+    ML_AVAILABLE = True
+except ImportError:
+    ML_AVAILABLE = False
+    joblib = None
 
 
 def detect_chi_noise_core(y: np.ndarray,
@@ -213,6 +222,271 @@ def detect_chi_noise_core(y: np.ndarray,
             "ratio_db_min": ratio_db_min,
             "flux_db_thresh": flux_db_thresh,
             "score_thresh": score_thresh
+        }
+    }
+
+
+def _extract_ml_features(y: np.ndarray, sr: int, tail_ms=200, ref_ms=300, hi_band=(5000, 15000)):
+    """
+    提取音频特征（用于机器学习）
+    
+    Returns:
+        np.ndarray: 特征向量
+    """
+    # 确保音频是单声道
+    if y.ndim > 1:
+        y = np.mean(y, axis=0)
+    
+    # 计算采样点数
+    N_tail = max(1, int(sr * tail_ms / 1000))
+    N_ref = max(1, int(sr * ref_ms / 1000))
+    
+    # 提取尾部音频和参考音频
+    tail = y[-N_tail:]
+    ref_start = max(0, len(y) - N_tail - N_ref)
+    ref = y[ref_start:len(y) - N_tail]
+    
+    # 如果参考窗口太短，使用音频前半部分
+    if len(ref) < int(0.5 * N_tail):
+        ref = y[:max(int(0.5 * N_tail), len(y)//2)]
+    
+    # STFT 分析
+    n_fft = 1024 if sr < 32000 else 2048
+    hop = n_fft // 4
+    
+    S_tail = librosa.stft(tail, n_fft=n_fft, hop_length=hop, window='hann')
+    S_ref = librosa.stft(ref, n_fft=n_fft, hop_length=hop, window='hann')
+    
+    mag_tail = np.abs(S_tail)
+    mag_ref = np.abs(S_ref)
+    
+    # 获取频率数组
+    freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
+    hi_mask = (freqs >= hi_band[0]) & (freqs <= hi_band[1])
+    
+    # 计算高频能量
+    hi_e_tail = np.maximum(1e-12, (mag_tail[hi_mask]**2).sum(axis=0))
+    hi_e_ref = np.maximum(1e-12, (mag_ref[hi_mask]**2).sum(axis=0))
+    
+    ref_med = float(np.median(hi_e_ref))
+    ref_mean = float(np.mean(hi_e_ref))
+    ref_std = float(np.std(hi_e_ref) + 1e-12)
+    
+    # 计算相对增益（dB）
+    ratio_db_seq = 10 * np.log10(hi_e_tail / (ref_med + 1e-12))
+    ratio_db_peak = float(np.max(ratio_db_seq))
+    ratio_db_mean = float(np.mean(ratio_db_seq))
+    ratio_db_std = float(np.std(ratio_db_seq))
+    ratio_db_median = float(np.median(ratio_db_seq))
+    
+    # 计算瞬态变化（谱通量）
+    flux_seq = np.maximum(0.0, np.diff(np.log(hi_e_tail + 1e-12)))
+    flux_db_peak = float(10 * np.log10(1 + np.max(flux_seq))) if len(flux_seq) > 0 else 0.0
+    flux_db_mean = float(10 * np.log10(1 + np.mean(flux_seq))) if len(flux_seq) > 0 else 0.0
+    
+    # 计算频谱特征
+    flat_tail = librosa.feature.spectral_flatness(S=mag_tail**2)
+    flat_db = float(10 * np.log10(np.median(flat_tail) + 1e-12))
+    flat_mean = float(10 * np.log10(np.mean(flat_tail) + 1e-12))
+    
+    rolloff_tail = librosa.feature.spectral_rolloff(S=mag_tail, sr=sr, roll_percent=0.95)
+    rolloff_ratio = float(np.median(rolloff_tail) / (sr / 2))
+    rolloff_mean = float(np.mean(rolloff_tail) / (sr / 2))
+    
+    # 计算 RMS 能量比
+    rms_tail = float(np.sqrt(np.mean(tail**2) + 1e-12))
+    rms_ref = float(np.sqrt(np.mean(ref**2) + 1e-12))
+    rms_ratio = rms_tail / (rms_ref + 1e-12)
+    
+    # 计算波峰因子
+    peak_tail = float(np.max(np.abs(tail)))
+    crest_db = float(20 * np.log10((peak_tail + 1e-9) / (rms_tail + 1e-9)))
+    
+    # 计算零交叉率
+    zcr_tail = float(librosa.feature.zero_crossing_rate(tail)[0].mean())
+    zcr_ref = float(librosa.feature.zero_crossing_rate(ref)[0].mean())
+    zcr_ratio = zcr_tail / (zcr_ref + 1e-12)
+    
+    # 计算MFCC特征（前3个系数）
+    mfcc_tail = librosa.feature.mfcc(y=tail, sr=sr, n_mfcc=13)
+    mfcc_mean = float(np.mean(mfcc_tail[1:4]))  # 使用1-3号系数
+    
+    # 计算超阈值持续时间
+    over_thresh = ratio_db_seq > 5.5
+    over_frames = int(np.sum(over_thresh))
+    over_ms = over_frames * hop / sr * 1000.0
+    
+    # 找到峰值位置
+    k_peak = int(np.argmax(ratio_db_seq))
+    t0_global = len(y) - N_tail + int(k_peak * hop)
+    distance_from_end = len(y) - t0_global
+    distance_from_end_ms = distance_from_end / sr * 1000
+    
+    # 计算尾部能量分布
+    tail_energy = np.abs(tail)**2
+    tail_energy_norm = tail_energy / (np.sum(tail_energy) + 1e-12)
+    energy_concentration = float(np.sum(tail_energy_norm[-int(len(tail)*0.3):]))  # 最后30%的能量集中度
+    
+    # 返回特征向量
+    features = np.array([
+        ratio_db_peak,
+        ratio_db_mean,
+        ratio_db_std,
+        ratio_db_median,
+        flux_db_peak,
+        flux_db_mean,
+        flat_db,
+        flat_mean,
+        rolloff_ratio,
+        rolloff_mean,
+        rms_ratio,
+        crest_db,
+        zcr_ratio,
+        mfcc_mean,
+        over_ms,
+        distance_from_end_ms,
+        energy_concentration,
+        ref_med,
+        ref_mean,
+        ref_std,
+    ])
+    
+    return features
+
+
+def detect_chi_noise_core_v2(y: np.ndarray,
+                             sr: int,
+                             model_path: Optional[Union[str, Path]] = None,
+                             tail_ms=200,
+                             ref_ms=300,
+                             hi_band=(5000, 15000),
+                             fallback_to_v1=True):
+    """
+    检测音频数据结尾是否存在 "chi" 杂音（基于机器学习的版本）
+    
+    使用训练好的随机森林模型进行检测，相比硬编码阈值方法更加灵活和准确。
+    模型会自动学习特征之间的复杂关系，无需手动调整阈值。
+    
+    Args:
+        y: 音频数据数组（numpy array）
+        sr: 采样率
+        model_path: 模型文件路径，默认为 "./noise_detector_model.pkl"
+        tail_ms: 检测尾部窗口长度（毫秒）
+        ref_ms: 参考窗口长度（毫秒）
+        hi_band: 高频频带范围（Hz）
+        fallback_to_v1: 如果模型加载失败，是否回退到v1版本
+    
+    Returns:
+        dict: 包含检测结果的字典
+            - has_chi: bool, 是否检测到杂音
+            - probability: float, 模型预测的概率（0-1）
+            - method: str, 使用的检测方法（"ml" 或 "v1_fallback"）
+            - score: float, 综合评分（兼容v1格式，0-10）
+            - ratio_db_peak: float, 高频相对增益峰值（dB）
+            - flux_db_peak: float, 瞬态变化峰值（dB）
+            - features: dict, 提取的所有特征值
+            - details: dict, 详细检测信息
+    """
+    if not ML_AVAILABLE:
+        if fallback_to_v1:
+            result = detect_chi_noise_core(y, sr, tail_ms=tail_ms, ref_ms=ref_ms, hi_band=hi_band)
+            result["method"] = "v1_fallback"
+            result["probability"] = 1.0 if result["has_chi"] else 0.0
+            return result
+        else:
+            raise ImportError("joblib not available. Install it with: pip install joblib scikit-learn")
+    
+    # 加载模型
+    if model_path is None:
+        model_path = Path("./noise_detector_model.pkl")
+    else:
+        model_path = Path(model_path)
+    
+    if not model_path.exists():
+        if fallback_to_v1:
+            result = detect_chi_noise_core(y, sr, tail_ms=tail_ms, ref_ms=ref_ms, hi_band=hi_band)
+            result["method"] = "v1_fallback"
+            result["probability"] = 1.0 if result["has_chi"] else 0.0
+            return result
+        else:
+            raise FileNotFoundError(f"Model file not found: {model_path}")
+    
+    try:
+        model = joblib.load(model_path)
+    except Exception as e:
+        if fallback_to_v1:
+            result = detect_chi_noise_core(y, sr, tail_ms=tail_ms, ref_ms=ref_ms, hi_band=hi_band)
+            result["method"] = "v1_fallback"
+            result["probability"] = 1.0 if result["has_chi"] else 0.0
+            return result
+        else:
+            raise RuntimeError(f"Failed to load model: {e}")
+    
+    # 提取特征
+    features = _extract_ml_features(y, sr, tail_ms=tail_ms, ref_ms=ref_ms, hi_band=hi_band)
+    features = features.reshape(1, -1)
+    
+    # 预测
+    prediction = model.predict(features)[0]
+    probabilities = model.predict_proba(features)[0]
+    
+    # 获取特征名称（用于返回详细信息）
+    feature_names = [
+        'ratio_db_peak', 'ratio_db_mean', 'ratio_db_std', 'ratio_db_median',
+        'flux_db_peak', 'flux_db_mean',
+        'flat_db', 'flat_mean',
+        'rolloff_ratio', 'rolloff_mean',
+        'rms_ratio',
+        'crest_db',
+        'zcr_ratio',
+        'mfcc_mean',
+        'over_ms',
+        'distance_from_end_ms',
+        'energy_concentration',
+        'ref_med', 'ref_mean', 'ref_std'
+    ]
+    
+    # 构建特征字典
+    features_dict = {name: float(val) for name, val in zip(feature_names, features[0])}
+    
+    # 计算一些额外的统计信息（兼容v1的输出格式）
+    ratio_db_peak = features_dict['ratio_db_peak']
+    flux_db_peak = features_dict['flux_db_peak']
+    flat_db = features_dict['flat_db']
+    rolloff_ratio = features_dict['rolloff_ratio']
+    crest_db = features_dict['crest_db']
+    rms_ratio = features_dict['rms_ratio']
+    over_ms = features_dict['over_ms']
+    distance_from_end_ms = features_dict['distance_from_end_ms']
+    
+    # 判断是否靠近结尾（200ms内）
+    near_end = distance_from_end_ms <= 200.0
+    
+    return {
+        "has_chi": bool(prediction == 1),
+        "probability": float(probabilities[1]),  # 有杂音的概率
+        "method": "ml",
+        "score": float(probabilities[1] * 10),  # 转换为0-10的分数，兼容v1格式
+        "ratio_db_peak": ratio_db_peak,
+        "flux_db_peak": flux_db_peak,
+        "flat_db": flat_db,
+        "rolloff_ratio": rolloff_ratio,
+        "crest_db": crest_db,
+        "rms_ratio": rms_ratio,
+        "over_ms": over_ms,
+        "near_end": bool(near_end),
+        "distance_from_end_ms": distance_from_end_ms,
+        "features": features_dict,
+        "details": {
+            "tail_ms": tail_ms,
+            "ref_ms": ref_ms,
+            "hi_band": hi_band,
+            "model_path": str(model_path),
+            "prediction": int(prediction),
+            "probabilities": {
+                "no_noise": float(probabilities[0]),
+                "has_noise": float(probabilities[1])
+            }
         }
     }
 

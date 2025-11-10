@@ -1,0 +1,14 @@
+# 杂音检测模型训练脚本的依赖库
+# Requirements for noise detector training script
+
+# 核心依赖 (Core dependencies)
+numpy>=1.26.2          # 数值计算库，用于数组操作和数学运算
+librosa>=0.10.2        # 音频处理库，用于音频特征提取和STFT分析
+scikit-learn>=1.3.0    # 机器学习库，包含随机森林分类器和评估工具
+joblib>=1.3.0          # 模型序列化库，用于保存和加载训练好的模型
+
+# 注意 (Notes):
+# - numpy 和 librosa 通常已在项目主依赖中
+# - scikit-learn 会自动安装 joblib（作为依赖），但建议显式声明
+# - 如果使用 Python 3.10+，这些版本应该都能正常工作
+

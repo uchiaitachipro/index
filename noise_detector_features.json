@@ -1,0 +1,25 @@
+{
+  "feature_names": [
+    "ratio_db_peak",
+    "ratio_db_mean",
+    "ratio_db_std",
+    "ratio_db_median",
+    "flux_db_peak",
+    "flux_db_mean",
+    "flat_db",
+    "flat_mean",
+    "rolloff_ratio",
+    "rolloff_mean",
+    "rms_ratio",
+    "crest_db",
+    "zcr_ratio",
+    "mfcc_mean",
+    "over_ms",
+    "distance_from_end_ms",
+    "energy_concentration",
+    "ref_med",
+    "ref_mean",
+    "ref_std"
+  ],
+  "n_features": 20
+}
