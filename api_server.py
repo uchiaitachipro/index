@@ -378,7 +378,7 @@ async def _process_story_audio_generation(story_data: list, custom_voice_map: Op
         
         # 准备情感参数
         emo_vec = [0] * 8
-        emo_weight = 0.15
+        emo_weight = 0.35
         emo_control_method = 0
         
         if emotion and emotion.lower() != "unknown":

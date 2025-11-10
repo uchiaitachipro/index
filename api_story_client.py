@@ -43,22 +43,6 @@ def print_yellow(text):
 
 # 测试用例配置
 TEST_CASES = [
-    # {
-    #     "name": "无音色映射测试（文件上传）",
-    #     "description": "测试使用默认音色映射生成故事音频（文件上传方式）",
-    #     "json_file": "examples/role_778_True.json",
-    #     "voice_map": None,
-    #     "output_suffix": "no_voicemap",
-    #     "use_json_api": False
-    # },
-    # {
-    #     "name": "无音色映射测试（JSON直接调用）",
-    #     "description": "测试使用默认音色映射生成故事音频（JSON直接调用方式）",
-    #     "json_file": "examples/role_778_True.json",
-    #     "voice_map": None,
-    #     "output_suffix": "json_api_no_voicemap",
-    #     "use_json_api": True
-    # },
     {
         "name": "单个条目批量测试",
         "description": "依次调用 generate_story_audio_single API 处理前N个条目",
@@ -66,242 +50,8 @@ TEST_CASES = [
         "item_count": 3,  # 处理前5个条目
         "output_suffix": "single_batch",
         "use_single_api": True
-    },
-    # {
-    #     "name": "自定义音色映射测试",
-    #     "description": "测试使用自定义音色映射生成故事音频",
-    #     "json_file": "examples/role_778_True.json",
-    #     "voice_map": "examples/voice_map_example.json",
-    #     "output_suffix": "with_voicemap",
-    #     "use_json_api": False
-    # }
-]
-
-
-def generate_story_audio(
-    api_url: str, 
-    json_file_path: str, 
-    output_dir: str = "outputs",
-    voice_map_path: str = None,
-    case_name: str = "test"
-):
-    """
-    调用 API 生成故事音频和字幕
-    
-    Args:
-        api_url: API 服务器地址
-        json_file_path: 故事 JSON 文件路径
-        output_dir: 输出目录
-        voice_map_path: 自定义音色映射 JSON 文件路径（可选）
-        case_name: 测试用例名称（用于输出文件命名）
-    """
-    # 确保输出目录存在
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
-    
-    # 读取 JSON 文件
-    print(f">> 读取 JSON 文件: {json_file_path}")
-    
-    # 准备请求数据
-    files = {}
-    data = {}
-    
-    with open(json_file_path, 'rb') as f:
-        files['file'] = (Path(json_file_path).name, f, 'application/json')
-        
-        # 如果提供了自定义音色映射
-        if voice_map_path and Path(voice_map_path).exists():
-            print(f">> 使用自定义音色映射: {voice_map_path}")
-            with open(voice_map_path, 'r', encoding='utf-8') as vm:
-                voice_map_content = vm.read()
-                data['voice_map'] = voice_map_content
-        
-        # 调用 API
-        print(f">> 调用 API: {api_url}/generate_story_audio")
-        print(">> 正在生成音频和字幕，请耐心等待...")
-        
-        try:
-            response = requests.post(
-                f"{api_url}/generate_story_audio",
-                files=files,
-                data=data,
-                timeout=6000  # 100分钟超时
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                
-                if result.get("status") == "success":
-                    print(f"\n>> ✓ 成功!")
-                    print(f"   - 处理条目: {result['processed_items']}")
-                    print(f"   - 跳过条目: {result['skipped_items']}")
-                    print(f"   - 总时长: {result['total_duration']/1000:.2f} 秒")
-                    print(f"   - 字幕数量: {result['subtitle_count']}")
-                    print(f"   - 采样率: {result['sample_rate']} Hz")
-                    
-                    # 保存音频文件
-                    audio_base64 = result['audio']
-                    audio_bytes = base64.b64decode(audio_base64)
-                    
-                    # 生成输出文件名（使用测试用例名称）
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    audio_output_path = Path(output_dir) / f"{case_name}_{timestamp}.wav"
-                    subtitle_output_path = Path(output_dir) / f"{case_name}_{timestamp}.json"
-                    subtitle_srt_path = Path(output_dir) / f"{case_name}_{timestamp}.srt"
-                    
-                    # 保存音频
-                    with open(audio_output_path, 'wb') as f:
-                        f.write(audio_bytes)
-                    print(f"   - 音频已保存: {audio_output_path}")
-                    
-                    # 保存字幕（JSON 格式）
-                    subtitles = result['subtitles']
-                    with open(subtitle_output_path, 'w', encoding='utf-8') as f:
-                        json.dump(subtitles, f, ensure_ascii=False, indent=2)
-                    print(f"   - 字幕已保存: {subtitle_output_path}")
-                    
-                    # 保存字幕（SRT 格式）
-                    generate_srt(subtitles, subtitle_srt_path)
-                    print(f"   - SRT 字幕已保存: {subtitle_srt_path}")
-                    
-                    print(f"\n>> 所有文件已保存到: {output_dir}/")
-                    return True
-                else:
-                    print(f"\n>> ✗ API 返回错误: {result.get('error', '未知错误')}")
-                    return False
-            else:
-                print(f"\n>> ✗ HTTP 错误: {response.status_code}")
-                try:
-                    error_data = response.json()
-                    print(f"   错误信息: {error_data.get('error', response.text)}")
-                except:
-                    print(f"   响应内容: {response.text[:500]}")
-                return False
-                
-        except requests.exceptions.Timeout:
-            print("\n>> ✗ 请求超时，故事可能太长，请尝试分段处理")
-            return False
-        except requests.exceptions.ConnectionError:
-            print(f"\n>> ✗ 无法连接到 API 服务器: {api_url}")
-            print("   请确保服务器正在运行")
-            return False
-        except Exception as ex:
-            print(f"\n>> ✗ 发生错误: {str(ex)}")
-            import traceback
-            traceback.print_exc()
-            return False
-
-
-def generate_story_audio_json_api(
-    api_url: str,
-    json_file_path: str,
-    output_dir: str = "outputs",
-    voice_map_path: str = None,
-    case_name: str = "test"
-):
-    """
-    调用 JSON API 生成故事音频和字幕（直接传递 JSON 数据，不上传文件）
-    
-    Args:
-        api_url: API 服务器地址
-        json_file_path: 故事 JSON 文件路径
-        output_dir: 输出目录
-        voice_map_path: 自定义音色映射 JSON 文件路径（可选）
-        case_name: 测试用例名称（用于输出文件命名）
-    """
-    # 确保输出目录存在
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
-    
-    # 读取 JSON 文件
-    print(f">> 读取 JSON 文件: {json_file_path}")
-    with open(json_file_path, 'r', encoding='utf-8') as f:
-        story_data = json.load(f)
-    
-    # 准备请求数据
-    request_body = {
-        "story_data": story_data
     }
-    
-    # 如果提供了自定义音色映射
-    if voice_map_path and Path(voice_map_path).exists():
-        print(f">> 使用自定义音色映射: {voice_map_path}")
-        with open(voice_map_path, 'r', encoding='utf-8') as vm:
-            voice_map = json.load(vm)
-            request_body['voice_map'] = voice_map
-    
-    # 调用 API
-    print(f">> 调用 API: {api_url}/generate_story_audio_json")
-    print(">> 正在生成音频和字幕，请耐心等待...")
-    
-    try:
-        response = requests.post(
-            f"{api_url}/generate_story_audio_json",
-            json=request_body,
-            headers={"Content-Type": "application/json"},
-            timeout=6000  # 100分钟超时
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            
-            if result.get("status") == "success":
-                print(f"\n>> ✓ 成功!")
-                print(f"   - 处理条目: {result['processed_items']}")
-                print(f"   - 跳过条目: {result['skipped_items']}")
-                print(f"   - 总时长: {result['total_duration']/1000:.2f} 秒")
-                print(f"   - 字幕数量: {result['subtitle_count']}")
-                print(f"   - 采样率: {result['sample_rate']} Hz")
-                
-                # 保存音频文件
-                audio_base64 = result['audio']
-                audio_bytes = base64.b64decode(audio_base64)
-                
-                # 生成输出文件名（使用测试用例名称）
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                audio_output_path = Path(output_dir) / f"{case_name}_{timestamp}.wav"
-                subtitle_output_path = Path(output_dir) / f"{case_name}_{timestamp}.json"
-                subtitle_srt_path = Path(output_dir) / f"{case_name}_{timestamp}.srt"
-                
-                # 保存音频
-                with open(audio_output_path, 'wb') as f:
-                    f.write(audio_bytes)
-                print(f"   - 音频已保存: {audio_output_path}")
-                
-                # 保存字幕（JSON 格式）
-                subtitles = result['subtitles']
-                with open(subtitle_output_path, 'w', encoding='utf-8') as f:
-                    json.dump(subtitles, f, ensure_ascii=False, indent=2)
-                print(f"   - 字幕已保存: {subtitle_output_path}")
-                
-                # 保存字幕（SRT 格式）
-                generate_srt(subtitles, subtitle_srt_path)
-                print(f"   - SRT 字幕已保存: {subtitle_srt_path}")
-                
-                print(f"\n>> 所有文件已保存到: {output_dir}/")
-                return True
-            else:
-                print(f"\n>> ✗ API 返回错误: {result.get('error', '未知错误')}")
-                return False
-        else:
-            print(f"\n>> ✗ HTTP 错误: {response.status_code}")
-            try:
-                error_data = response.json()
-                print(f"   错误信息: {error_data.get('error', response.text)}")
-            except:
-                print(f"   响应内容: {response.text[:500]}")
-            return False
-            
-    except requests.exceptions.Timeout:
-        print("\n>> ✗ 请求超时，故事可能太长，请尝试分段处理")
-        return False
-    except requests.exceptions.ConnectionError:
-        print(f"\n>> ✗ 无法连接到 API 服务器: {api_url}")
-        print("   请确保服务器正在运行")
-        return False
-    except Exception as ex:
-        print(f"\n>> ✗ 发生错误: {str(ex)}")
-        import traceback
-        traceback.print_exc()
-        return False
+]
 
 
 def generate_srt(subtitles: list, output_path: str):
@@ -568,34 +318,15 @@ def run_test_case(test_case: dict, api_url: str, output_dir: str) -> bool:
     start_time = time.time()
     
     # 根据配置选择调用方式
-    if use_single_api:
-        # 使用单个条目批量调用方式
-        item_count = test_case.get('item_count', 5)
-        success = generate_story_audio_single_batch(
-            api_url=api_url,
-            json_file_path=json_file,
-            output_dir=output_dir,
-            item_count=item_count,
-            case_name=test_case['output_suffix']
-        )
-    elif use_json_api:
-        # 使用 JSON 直接调用方式
-        success = generate_story_audio_json_api(
-            api_url=api_url,
-            json_file_path=json_file,
-            output_dir=output_dir,
-            voice_map_path=voice_map,
-            case_name=test_case['output_suffix']
-        )
-    else:
-        # 使用文件上传方式
-        success = generate_story_audio(
-            api_url=api_url,
-            json_file_path=json_file,
-            output_dir=output_dir,
-            voice_map_path=voice_map,
-            case_name=test_case['output_suffix']
-        )
+
+    item_count = test_case.get('item_count', 5)
+    success = generate_story_audio_single_batch(
+        api_url=api_url,
+        json_file_path=json_file,
+        output_dir=output_dir,
+        item_count=item_count,
+        case_name=test_case['output_suffix']
+    )
     
     # 记录结束时间
     elapsed_time = time.time() - start_time
