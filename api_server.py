@@ -18,7 +18,8 @@ import numpy as np
 from glob import glob
 
 from indextts.infer_v2_subtitle import IndexTTS2SubTitle
-from audio_detect_noise_v2 import detect_chi_noise_core, detect_chi_noise
+from audio_detect_noise_v2 import detect_chi_noise
+from text_spilter import split_text_by_characters
 
 tts = None
 api_verbose = False
@@ -463,6 +464,13 @@ async def _process_story_audio_generation(story_data: list, custom_voice_map: Op
                     segment_noise_score = noise_result.get('score', 0.0)
                     
                     if has_noise:
+                        if api_verbose:
+                            timestamp = int(time.time() * 1000)
+                            save_audio_path = f"uploads/noise/noise_{timestamp}.wav"
+                            os.makedirs(os.path.dirname(save_audio_path), exist_ok=True)
+                            with open(save_audio_path, "wb") as f:
+                                f.write(wav_bytes)
+                            print(f"    警告: 检测到杂音，已保存到 {save_audio_path}")
                         # 检测到杂音
                         if retry < max_retries - 1:
                             # 还有重试机会，抛出异常触发重试
@@ -892,6 +900,58 @@ async def generate_story_audio_single(request: Request):
             }
         )
 
+@app.post("/split_text", responses={
+    200: {"content": {"application/json": {}}},
+    400: {"content": {"application/json": {}}},
+    500: {"content": {"application/json": {}}}
+})
+async def split_text(request: Request):
+    """
+    分割文本
+    
+    请求体格式：
+    {
+        "text": "我要再去西漠。",
+        "max_chars_per_segment": 100
+    }
+    
+    返回：
+    {
+        "status": "success",
+        "segments": [
+            "我要再去西漠。",
+            "我要再去西漠。",   
+            "我要再去西漠。"
+    }
+    """
+    try:
+        # 解析请求体
+        try:
+            body = await request.json()
+        except json.JSONDecodeError as e:
+            return JSONResponse(status_code=400, content={"status": "error", "error": f"JSON 解析失败: {str(e)}"})
+
+        # 获取文本
+        text = body.get("text")
+        if not text:
+            return JSONResponse(status_code=400, content={"status": "error", "error": "缺少 text 字段"})
+
+        # 获取最大字符数
+        max_chars_per_segment = body.get("max_chars_per_segment", 100)
+        if not isinstance(max_chars_per_segment, int):
+            return JSONResponse(status_code=400, content={"status": "error", "error": "max_chars_per_segment 必须是整数"})
+
+        # 分割文本
+        segments = split_text_by_characters(text, max_chars_per_segment)
+
+        return JSONResponse(status_code=200, content={"status": "success", "segments": segments})
+
+    except ValueError as ve:
+        return JSONResponse(status_code=400, content={"status": "error", "error": str(ve)})
+    except Exception as ex:
+        tb_str = ''.join(traceback.format_exception(type(ex), ex, ex.__traceback__))
+        print(f">> 错误: {tb_str}")
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(tb_str)})
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

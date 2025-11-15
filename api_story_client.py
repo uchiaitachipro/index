@@ -43,13 +43,28 @@ def print_yellow(text):
 
 # 测试用例配置
 TEST_CASES = [
+    # {
+    #     "name": "单个条目批量测试",
+    #     "description": "依次调用 generate_story_audio_single API 处理前N个条目",
+    #     "json_file": "examples/role_778_True.json",
+    #     "item_count": 3,  # 处理前5个条目
+    #     "output_suffix": "single_batch",
+    #     "use_single_api": True
+    # },
     {
-        "name": "单个条目批量测试",
-        "description": "依次调用 generate_story_audio_single API 处理前N个条目",
-        "json_file": "examples/role_778_True.json",
-        "item_count": 3,  # 处理前5个条目
-        "output_suffix": "single_batch",
-        "use_single_api": True
+        "name": "文本分割测试",
+        "description": "调用 split_text API 分割文本",
+        "text": """
+旅行者二号早已不受引导，只能单一的前进，传送回这组神秘的数据信息后，在那片漆黑的宇宙空间匆匆而过，驶向更加幽暗与深远的星域。
+由于那片星空太遥远，纵然有了重大发现，捕捉到了一幅震撼性的画面，人类目前也无能为力。
+这组神秘信息并没有对外公布。而不久后，旅行者二号发生了故障，中断了与地球的讯号传送。
+也许至此可以画上一个句号了，不过有时候事情往往会出乎人们的预料。
+无论是对星空的观测与探索，还是进行生命与物理的科学研究，空间站都具有得天独厚的优越环境。
+从一九七一年苏联首先发射载人空间站成功，到目前为止全世界已发射了九个空间站⋯⋯       
+        """,
+        "max_chars_per_segment": 80,
+        "output_suffix": "split_text",
+        "use_split_text_api": True
     }
 ]
 
@@ -85,6 +100,50 @@ def generate_srt(subtitles: list, output_path: str):
             else:
                 f.write(f"{text}\n")
             f.write("\n")
+
+def generate_split_text_api(
+    api_url: str,
+    text: str,
+    max_chars_per_segment: int
+):
+    """
+    调用 split_text API 分割文本
+    """ 
+    # 准备请求数据
+    request_body = {
+        "text": text,
+        "max_chars_per_segment": max_chars_per_segment
+    }
+    
+    # 调用 API
+    print(f">> 调用 API: {api_url}/split_text")
+    print(f">> 分割文本: {text}")
+    
+    try:
+        response = requests.post(
+            f"{api_url}/split_text",
+            json=request_body,
+            headers={"Content-Type": "application/json"},
+            timeout=3000  # 10分钟超时
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            return result.get("segments", [])
+        else:
+            print(f"   ✗ HTTP 错误: {response.status_code}")
+            return False
+    except requests.exceptions.Timeout:
+        print(f"   ✗ 请求超时")
+        return False
+    except requests.exceptions.ConnectionError:
+        print(f"   ✗ 无法连接到 API 服务器: {api_url}")
+        return False
+    except Exception as ex:
+        print(f"   ✗ 发生错误: {str(ex)}")
+        import traceback
+        traceback.print_exc()
+        return False
 
 
 def generate_story_audio_single_api(
@@ -287,12 +346,13 @@ def run_test_case(test_case: dict, api_url: str, output_dir: str) -> bool:
     print("=" * 80)
     
     # 检查文件是否存在
-    json_file = test_case['json_file']
+    json_file = test_case.get('json_file', None)
     voice_map = test_case.get('voice_map')
     use_json_api = test_case.get('use_json_api', False)
     use_single_api = test_case.get('use_single_api', False)
-    
-    if not Path(json_file).exists():
+    use_split_text_api = test_case.get('use_split_text_api', False)
+
+    if json_file and not Path(json_file).exists():
         print(f"✗ 错误: JSON 文件不存在: {json_file}")
         return False
     
@@ -307,10 +367,26 @@ def run_test_case(test_case: dict, api_url: str, output_dir: str) -> bool:
         item_count = test_case.get('item_count', 5)
         print(f"  - API 类型: {api_type}")
         print(f"  - 处理条目数: {item_count}")
-    else:
-        api_type = 'JSON 直接调用' if use_json_api else '文件上传'
+    elif use_split_text_api:
+        api_type = "文本分割调用"
         print(f"  - API 类型: {api_type}")
-    print(f"  - JSON 文件: {json_file}")
+        print(f"  - 文本: {test_case.get('text', '')}")
+        print(f"  - 最大字符数: {test_case.get('max_chars_per_segment', 100)}")
+        text = test_case.get('text', '')
+        max_chars_per_segment = test_case.get('max_chars_per_segment', 100)
+        segments = generate_split_text_api(
+            api_url=api_url,
+            text=text,
+            max_chars_per_segment=max_chars_per_segment
+        )
+        if isinstance(segments, list):
+            for segment in segments:
+                print(f"  -  {segment}")
+            return True
+        else:
+            print(f"  - 错误: 分割文本失败")
+            return False
+
     print(f"  - 音色映射: {voice_map if voice_map else '未使用（使用默认映射）'}")
     print(f"  - 输出目录: {output_dir}")
     
