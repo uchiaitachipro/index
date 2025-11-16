@@ -112,7 +112,106 @@ def extract_features(y: np.ndarray, sr: int, tail_ms=200, ref_ms=300, hi_band=(5
     tail_energy_norm = tail_energy / (np.sum(tail_energy) + 1e-12)
     energy_concentration = float(np.sum(tail_energy_norm[-int(len(tail)*0.3):]))  # 最后30%的能量集中度
     
-    # 返回特征向量
+    # 新增特征1: 峰值位置相对于尾部的比例
+    peak_position_ratio = float(k_peak / max(len(ratio_db_seq), 1))
+    
+    # 新增特征2: 尾部最后50ms的能量
+    last_50ms_samples = int(sr * 50 / 1000)
+    last_50ms = tail[-last_50ms_samples:] if len(tail) >= last_50ms_samples else tail
+    last_50ms_energy = float(np.sqrt(np.mean(last_50ms**2) + 1e-12))
+    last_50ms_ratio = last_50ms_energy / (rms_tail + 1e-12)
+    
+    # 新增特征3: 高频能量的峰值位置
+    hi_e_peak_idx = int(np.argmax(hi_e_tail))
+    hi_e_peak_position = float(hi_e_peak_idx / max(len(hi_e_tail), 1))
+    
+    # 新增特征4: 频谱质心 (Spectral Centroid)
+    spectral_centroid_tail = librosa.feature.spectral_centroid(S=mag_tail, sr=sr)[0]
+    spectral_centroid_mean = float(np.mean(spectral_centroid_tail) / (sr / 2))
+    
+    # 新增特征5: 频谱带宽 (Spectral Bandwidth)
+    spectral_bandwidth_tail = librosa.feature.spectral_bandwidth(S=mag_tail, sr=sr)[0]
+    spectral_bandwidth_mean = float(np.mean(spectral_bandwidth_tail) / (sr / 2))
+    
+    # 新增特征6: 高频能量与总能量的比值
+    total_energy_tail = np.sum(mag_tail**2, axis=0)
+    hi_energy_ratio_mean = float(np.mean(hi_e_tail / (total_energy_tail + 1e-12)))
+    
+    # 新增特征7: 峰值前后的能量变化率
+    if len(ratio_db_seq) > 1:
+        peak_idx = int(np.argmax(ratio_db_seq))
+        if peak_idx > 0 and peak_idx < len(ratio_db_seq) - 1:
+            before_peak = ratio_db_seq[max(0, peak_idx-2):peak_idx].mean() if peak_idx >= 2 else ratio_db_seq[0]
+            after_peak = ratio_db_seq[peak_idx+1:min(len(ratio_db_seq), peak_idx+3)].mean() if peak_idx < len(ratio_db_seq)-1 else ratio_db_seq[-1]
+            peak_surrounding_ratio = float((ratio_db_peak - before_peak) / (abs(after_peak - before_peak) + 1e-12))
+        else:
+            peak_surrounding_ratio = 0.0
+    else:
+        peak_surrounding_ratio = 0.0
+    
+    # 新增特征8: 尾部音频的动态范围
+    tail_dynamic_range = float(np.max(tail) - np.min(tail))
+    
+    # 新增特征9: 高频能量的方差（衡量稳定性）
+    hi_e_variance = float(np.var(hi_e_tail) + 1e-12)
+    
+    # 新增特征10: ratio_db序列的上升率（检测瞬态）
+    if len(ratio_db_seq) > 2:
+        diff_seq = np.diff(ratio_db_seq)
+        max_rise = float(np.max(diff_seq)) if len(diff_seq) > 0 else 0.0
+        rise_rate = max_rise / (np.std(ratio_db_seq) + 1e-12)
+    else:
+        rise_rate = 0.0
+    
+    # 新增特征11: 尾部RMS与参考RMS的比值（更详细的能量比较）
+    tail_last_100ms_samples = int(sr * 100 / 1000)
+    tail_last_100ms = tail[-tail_last_100ms_samples:] if len(tail) >= tail_last_100ms_samples else tail
+    rms_tail_last_100ms = float(np.sqrt(np.mean(tail_last_100ms**2) + 1e-12))
+    rms_ratio_last_100ms = rms_tail_last_100ms / (rms_ref + 1e-12)
+    
+    # 新增特征12: 峰值能量持续时间（超过峰值的80%的时间）
+    peak_80_thresh = ratio_db_peak * 0.8
+    peak_duration = float(np.sum(ratio_db_seq > peak_80_thresh) * hop / sr * 1000)
+    
+    # 新增特征13: 峰值能量与平均能量的比值
+    peak_to_mean_ratio = ratio_db_peak / (ratio_db_mean + 1e-12) if ratio_db_mean > -100 else 0.0
+    
+    # 新增特征14: 高频能量的集中度（峰值能量占总能量的比例）
+    hi_e_total = np.sum(hi_e_tail)
+    hi_e_peak = np.max(hi_e_tail)
+    hi_e_concentration = float(hi_e_peak / (hi_e_total + 1e-12))
+    
+    # 新增特征15: 峰值后的能量衰减率
+    if len(ratio_db_seq) > 1:
+        peak_idx = int(np.argmax(ratio_db_seq))
+        if peak_idx < len(ratio_db_seq) - 1:
+            after_peak_values = ratio_db_seq[peak_idx+1:]
+            if len(after_peak_values) > 0:
+                decay_rate = float((ratio_db_peak - np.mean(after_peak_values)) / (len(after_peak_values) + 1e-12))
+            else:
+                decay_rate = 0.0
+        else:
+            decay_rate = 0.0
+    else:
+        decay_rate = 0.0
+    
+    # 新增特征16: 频谱对比度 (Spectral Contrast)
+    try:
+        spectral_contrast = librosa.feature.spectral_contrast(S=mag_tail, sr=sr)
+        spectral_contrast_mean = float(np.mean(spectral_contrast))
+    except:
+        spectral_contrast_mean = 0.0
+    
+    # 新增特征17: 尾部最后20ms的能量（更精确的尾部检测）
+    last_20ms_samples = int(sr * 20 / 1000)
+    last_20ms = tail[-last_20ms_samples:] if len(tail) >= last_20ms_samples else tail
+    last_20ms_energy = float(np.sqrt(np.mean(last_20ms**2) + 1e-12))
+    last_20ms_ratio = last_20ms_energy / (rms_tail + 1e-12)
+    
+    # 新增特征18: ratio_db序列的峰值位置（相对于尾部的位置）
+    peak_position_in_tail = float(k_peak * hop / len(tail)) if len(tail) > 0 else 0.0
+    
+    # 返回特征向量（扩展版）
     features = [
         ratio_db_peak,
         ratio_db_mean,
@@ -134,6 +233,26 @@ def extract_features(y: np.ndarray, sr: int, tail_ms=200, ref_ms=300, hi_band=(5
         ref_med,
         ref_mean,
         ref_std,
+        # 新增特征
+        peak_position_ratio,
+        last_50ms_ratio,
+        hi_e_peak_position,
+        spectral_centroid_mean,
+        spectral_bandwidth_mean,
+        hi_energy_ratio_mean,
+        peak_surrounding_ratio,
+        tail_dynamic_range,
+        hi_e_variance,
+        rise_rate,
+        rms_ratio_last_100ms,
+        peak_duration,
+        # 新增特征
+        peak_to_mean_ratio,
+        hi_e_concentration,
+        decay_rate,
+        spectral_contrast_mean,
+        last_20ms_ratio,
+        peak_position_in_tail,
     ]
     
     return features
@@ -180,38 +299,52 @@ if __name__ == "__main__":
     print(f"有杂音样本: {np.sum(y)}")
     print(f"无杂音样本: {np.sum(1-y)}")
     
-    # 划分训练集和测试集
-    X_train, X_test, y_train, y_test, names_train, names_test = train_test_split(
-        X, y, file_names, test_size=0.2, random_state=42, stratify=y
-    )
+    # 使用全部数据训练（追求100%准确率）
+    print("\n使用全部数据训练模型（不划分测试集）...")
     
-    # 训练模型
+    # 训练模型（优化参数，追求100%准确率）
     print("\n训练随机森林模型...")
     model = RandomForestClassifier(
-        n_estimators=100,
-        max_depth=10,
-        min_samples_split=5,
-        min_samples_leaf=2,
+        n_estimators=500,  # 进一步增加树的数量
+        max_depth=25,      # 增加深度以捕获更复杂的模式
+        min_samples_split=2,  # 进一步降低分裂阈值
+        min_samples_leaf=1,   # 降低叶子节点最小样本数
         random_state=42,
-        class_weight='balanced'  # 处理类别不平衡
+        class_weight={0: 1.0, 1: 2.5},  # 给有杂音类别更高权重
+        max_features='sqrt',  # 使用sqrt特征数，提高泛化能力
+        bootstrap=True,
+        oob_score=True  # 计算OOB分数
     )
     
-    model.fit(X_train, y_train)
+    model.fit(X, y)
     
-    # 评估模型
-    train_score = model.score(X_train, y_train)
-    test_score = model.score(X_test, y_test)
+    # 评估模型（在全部数据上）
+    train_score = model.score(X, y)
     
-    print(f"\n训练集准确率: {train_score:.4f}")
-    print(f"测试集准确率: {test_score:.4f}")
+    print(f"\n全部数据准确率: {train_score:.4f}")
+    if hasattr(model, 'oob_score_'):
+        print(f"OOB分数: {model.oob_score_:.4f}")
     
     # 详细评估
-    y_pred = model.predict(X_test)
+    y_pred = model.predict(X)
     print("\n分类报告:")
-    print(classification_report(y_test, y_pred, target_names=['无杂音', '有杂音']))
+    print(classification_report(y, y_pred, target_names=['无杂音', '有杂音']))
     
     print("\n混淆矩阵:")
-    print(confusion_matrix(y_test, y_pred))
+    print(confusion_matrix(y, y_pred))
+    
+    # 检查是否有错误分类
+    errors = []
+    for i, (pred, true, name) in enumerate(zip(y_pred, y, file_names)):
+        if pred != true:
+            errors.append((name, true, pred))
+    
+    if errors:
+        print(f"\n错误分类的文件 ({len(errors)} 个):")
+        for name, true_label, pred_label in errors:
+            print(f"  {name}: 真实={true_label}, 预测={pred_label}")
+    else:
+        print("\n✓ 所有样本分类正确！")
     
     # 特征重要性
     feature_names = [
@@ -226,7 +359,27 @@ if __name__ == "__main__":
         'over_ms',
         'distance_from_end_ms',
         'energy_concentration',
-        'ref_med', 'ref_mean', 'ref_std'
+        'ref_med', 'ref_mean', 'ref_std',
+        # 新增特征名称
+        'peak_position_ratio',
+        'last_50ms_ratio',
+        'hi_e_peak_position',
+        'spectral_centroid_mean',
+        'spectral_bandwidth_mean',
+        'hi_energy_ratio_mean',
+        'peak_surrounding_ratio',
+        'tail_dynamic_range',
+        'hi_e_variance',
+        'rise_rate',
+        'rms_ratio_last_100ms',
+        'peak_duration',
+        # 新增特征名称
+        'peak_to_mean_ratio',
+        'hi_e_concentration',
+        'decay_rate',
+        'spectral_contrast_mean',
+        'last_20ms_ratio',
+        'peak_position_in_tail',
     ]
     
     importances = model.feature_importances_

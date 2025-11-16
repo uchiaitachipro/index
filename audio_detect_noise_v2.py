@@ -327,7 +327,106 @@ def _extract_ml_features(y: np.ndarray, sr: int, tail_ms=200, ref_ms=300, hi_ban
     tail_energy_norm = tail_energy / (np.sum(tail_energy) + 1e-12)
     energy_concentration = float(np.sum(tail_energy_norm[-int(len(tail)*0.3):]))  # 最后30%的能量集中度
     
-    # 返回特征向量
+    # 新增特征1: 峰值位置相对于尾部的比例
+    peak_position_ratio = float(k_peak / max(len(ratio_db_seq), 1))
+    
+    # 新增特征2: 尾部最后50ms的能量
+    last_50ms_samples = int(sr * 50 / 1000)
+    last_50ms = tail[-last_50ms_samples:] if len(tail) >= last_50ms_samples else tail
+    last_50ms_energy = float(np.sqrt(np.mean(last_50ms**2) + 1e-12))
+    last_50ms_ratio = last_50ms_energy / (rms_tail + 1e-12)
+    
+    # 新增特征3: 高频能量的峰值位置
+    hi_e_peak_idx = int(np.argmax(hi_e_tail))
+    hi_e_peak_position = float(hi_e_peak_idx / max(len(hi_e_tail), 1))
+    
+    # 新增特征4: 频谱质心 (Spectral Centroid)
+    spectral_centroid_tail = librosa.feature.spectral_centroid(S=mag_tail, sr=sr)[0]
+    spectral_centroid_mean = float(np.mean(spectral_centroid_tail) / (sr / 2))
+    
+    # 新增特征5: 频谱带宽 (Spectral Bandwidth)
+    spectral_bandwidth_tail = librosa.feature.spectral_bandwidth(S=mag_tail, sr=sr)[0]
+    spectral_bandwidth_mean = float(np.mean(spectral_bandwidth_tail) / (sr / 2))
+    
+    # 新增特征6: 高频能量与总能量的比值
+    total_energy_tail = np.sum(mag_tail**2, axis=0)
+    hi_energy_ratio_mean = float(np.mean(hi_e_tail / (total_energy_tail + 1e-12)))
+    
+    # 新增特征7: 峰值前后的能量变化率
+    if len(ratio_db_seq) > 1:
+        peak_idx = int(np.argmax(ratio_db_seq))
+        if peak_idx > 0 and peak_idx < len(ratio_db_seq) - 1:
+            before_peak = ratio_db_seq[max(0, peak_idx-2):peak_idx].mean() if peak_idx >= 2 else ratio_db_seq[0]
+            after_peak = ratio_db_seq[peak_idx+1:min(len(ratio_db_seq), peak_idx+3)].mean() if peak_idx < len(ratio_db_seq)-1 else ratio_db_seq[-1]
+            peak_surrounding_ratio = float((ratio_db_peak - before_peak) / (abs(after_peak - before_peak) + 1e-12))
+        else:
+            peak_surrounding_ratio = 0.0
+    else:
+        peak_surrounding_ratio = 0.0
+    
+    # 新增特征8: 尾部音频的动态范围
+    tail_dynamic_range = float(np.max(tail) - np.min(tail))
+    
+    # 新增特征9: 高频能量的方差（衡量稳定性）
+    hi_e_variance = float(np.var(hi_e_tail) + 1e-12)
+    
+    # 新增特征10: ratio_db序列的上升率（检测瞬态）
+    if len(ratio_db_seq) > 2:
+        diff_seq = np.diff(ratio_db_seq)
+        max_rise = float(np.max(diff_seq)) if len(diff_seq) > 0 else 0.0
+        rise_rate = max_rise / (np.std(ratio_db_seq) + 1e-12)
+    else:
+        rise_rate = 0.0
+    
+    # 新增特征11: 尾部RMS与参考RMS的比值（更详细的能量比较）
+    rms_tail_last_100ms_samples = int(sr * 100 / 1000)
+    tail_last_100ms = tail[-rms_tail_last_100ms_samples:] if len(tail) >= rms_tail_last_100ms_samples else tail
+    rms_tail_last_100ms = float(np.sqrt(np.mean(tail_last_100ms**2) + 1e-12))
+    rms_ratio_last_100ms = rms_tail_last_100ms / (rms_ref + 1e-12)
+    
+    # 新增特征12: 峰值能量持续时间（超过峰值的80%的时间）
+    peak_80_thresh = ratio_db_peak * 0.8
+    peak_duration = float(np.sum(ratio_db_seq > peak_80_thresh) * hop / sr * 1000)
+    
+    # 新增特征13: 峰值能量与平均能量的比值
+    peak_to_mean_ratio = ratio_db_peak / (ratio_db_mean + 1e-12) if ratio_db_mean > -100 else 0.0
+    
+    # 新增特征14: 高频能量的集中度（峰值能量占总能量的比例）
+    hi_e_total = np.sum(hi_e_tail)
+    hi_e_peak = np.max(hi_e_tail)
+    hi_e_concentration = float(hi_e_peak / (hi_e_total + 1e-12))
+    
+    # 新增特征15: 峰值后的能量衰减率
+    if len(ratio_db_seq) > 1:
+        peak_idx = int(np.argmax(ratio_db_seq))
+        if peak_idx < len(ratio_db_seq) - 1:
+            after_peak_values = ratio_db_seq[peak_idx+1:]
+            if len(after_peak_values) > 0:
+                decay_rate = float((ratio_db_peak - np.mean(after_peak_values)) / (len(after_peak_values) + 1e-12))
+            else:
+                decay_rate = 0.0
+        else:
+            decay_rate = 0.0
+    else:
+        decay_rate = 0.0
+    
+    # 新增特征16: 频谱对比度 (Spectral Contrast)
+    try:
+        spectral_contrast = librosa.feature.spectral_contrast(S=mag_tail, sr=sr)
+        spectral_contrast_mean = float(np.mean(spectral_contrast))
+    except:
+        spectral_contrast_mean = 0.0
+    
+    # 新增特征17: 尾部最后20ms的能量（更精确的尾部检测）
+    last_20ms_samples = int(sr * 20 / 1000)
+    last_20ms = tail[-last_20ms_samples:] if len(tail) >= last_20ms_samples else tail
+    last_20ms_energy = float(np.sqrt(np.mean(last_20ms**2) + 1e-12))
+    last_20ms_ratio = last_20ms_energy / (rms_tail + 1e-12)
+    
+    # 新增特征18: ratio_db序列的峰值位置（相对于尾部的位置）
+    peak_position_in_tail = float(k_peak * hop / len(tail)) if len(tail) > 0 else 0.0
+    
+    # 返回特征向量（扩展版）
     features = np.array([
         ratio_db_peak,
         ratio_db_mean,
@@ -349,6 +448,26 @@ def _extract_ml_features(y: np.ndarray, sr: int, tail_ms=200, ref_ms=300, hi_ban
         ref_med,
         ref_mean,
         ref_std,
+        # 新增特征
+        peak_position_ratio,
+        last_50ms_ratio,
+        hi_e_peak_position,
+        spectral_centroid_mean,
+        spectral_bandwidth_mean,
+        hi_energy_ratio_mean,
+        peak_surrounding_ratio,
+        tail_dynamic_range,
+        hi_e_variance,
+        rise_rate,
+        rms_ratio_last_100ms,
+        peak_duration,
+        # 新增特征
+        peak_to_mean_ratio,
+        hi_e_concentration,
+        decay_rate,
+        spectral_contrast_mean,
+        last_20ms_ratio,
+        peak_position_in_tail,
     ])
     
     return features
@@ -443,7 +562,27 @@ def detect_chi_noise_core_v2(y: np.ndarray,
         'over_ms',
         'distance_from_end_ms',
         'energy_concentration',
-        'ref_med', 'ref_mean', 'ref_std'
+        'ref_med', 'ref_mean', 'ref_std',
+        # 新增特征名称
+        'peak_position_ratio',
+        'last_50ms_ratio',
+        'hi_e_peak_position',
+        'spectral_centroid_mean',
+        'spectral_bandwidth_mean',
+        'hi_energy_ratio_mean',
+        'peak_surrounding_ratio',
+        'tail_dynamic_range',
+        'hi_e_variance',
+        'rise_rate',
+        'rms_ratio_last_100ms',
+        'peak_duration',
+        # 新增特征名称
+        'peak_to_mean_ratio',
+        'hi_e_concentration',
+        'decay_rate',
+        'spectral_contrast_mean',
+        'last_20ms_ratio',
+        'peak_position_in_tail',
     ]
     
     # 构建特征字典
@@ -503,7 +642,14 @@ def detect_chi_noise_batch_core(audio_data_list: List[Tuple[np.ndarray, int, str
             - sr: 采样率
             - name: 标识名称（用于输出）
         verbose: 是否打印详细信息
-        **detect_kwargs: 传递给 detect_chi_noise_core 的其他参数
+        **detect_kwargs: 传递给 detect_chi_noise_core_v2 的其他参数
+            - model_path: Optional[Union[str, Path]], 模型文件路径
+            - tail_ms: int, 检测尾部窗口长度（毫秒），默认200
+            - ref_ms: int, 参考窗口长度（毫秒），默认300
+            - hi_band: tuple, 高频频带范围（Hz），默认(5000, 15000)
+            - fallback_to_v1: bool, 模型加载失败时是否回退到v1版本，默认True
+            注意：v1特有的参数（ratio_db_thresh, ratio_db_min, flux_db_thresh, score_thresh, must_be_within_ms）
+            会被自动过滤，不会传递给v2函数
     
     Returns:
         dict: 包含检测结果的字典
@@ -511,25 +657,31 @@ def detect_chi_noise_batch_core(audio_data_list: List[Tuple[np.ndarray, int, str
             - items_clean: list, 未检测到杂音的项目名称列表
             - results: dict, 每个项目的详细检测结果（key为name）
     """
+    # 过滤掉v1特有的参数，只保留v2支持的参数
+    v2_supported_params = {'model_path', 'tail_ms', 'ref_ms', 'hi_band', 'fallback_to_v1'}
+    v2_kwargs = {k: v for k, v in detect_kwargs.items() if k in v2_supported_params}
+    
     items_with_chi = []
     items_clean = []
     results = {}
     
     for y, sr, name in audio_data_list:
         try:
-            result = detect_chi_noise_core(y, sr, **detect_kwargs)
+            result = detect_chi_noise_core_v2(y, sr, **v2_kwargs)
             results[name] = result
             
             if result["has_chi"]:
                 items_with_chi.append(name)
                 if verbose:
+                    method_info = f" [{result.get('method', 'unknown')}]" if 'method' in result else ""
                     print(f"⚠️  {name}: 检测到杂音 (score={result['score']:.2f}, "
                           f"ratio={result['ratio_db_peak']:.2f}dB, "
-                          f"flux={result['flux_db_peak']:.2f}dB)")
+                          f"flux={result['flux_db_peak']:.2f}dB{method_info})")
             else:
                 items_clean.append(name)
                 if verbose:
-                    print(f"✓  {name}: 正常 (score={result['score']:.2f})")
+                    method_info = f" [{result.get('method', 'unknown')}]" if 'method' in result else ""
+                    print(f"✓  {name}: 正常 (score={result['score']:.2f}{method_info})")
         except Exception as e:
             print(f"✗  {name}: 检测失败 - {str(e)}")
             results[name] = {"error": str(e)}
@@ -574,37 +726,36 @@ def load_audio_from_bytes(audio_bytes: bytes) -> Tuple[np.ndarray, int]:
 
 
 def detect_chi_noise(audio_input: Union[str, Path, bytes], 
+                     model_path: Optional[Union[str, Path]] = None,
                      tail_ms=200,           # 检测尾部窗口（毫秒）
                      ref_ms=300,            # 参考窗口（毫秒）
                      hi_band=(5000, 15000), # 高频频带范围（Hz）
-                     ratio_db_thresh=5.5,   # 高频相对增益阈值（dB）
-                     ratio_db_min=6.0,      # 高频相对增益最低要求（dB），用于过滤弱信号（降低以捕获弱杂音）
-                     flux_db_thresh=3.0,    # 瞬态变化阈值（dB）
-                     score_thresh=4.0,      # 综合评分阈值（提高以减少误检）
-                     must_be_within_ms=200  # 杂音必须出现在结尾多少毫秒内（放宽以捕获边缘情况）
+                     fallback_to_v1=True    # 模型加载失败时是否回退到v1版本
                      ):
     """
     检测音频文件结尾是否存在 "chi" 杂音（封装函数，自动处理文件读取）
+    
+    使用基于机器学习的检测方法（v2），相比硬编码阈值方法更加灵活和准确。
     
     Args:
         audio_input: 音频输入，可以是：
             - 文件路径（str 或 Path）
             - 字节数组（bytes，WAV 格式）
-        tail_ms: 检测尾部窗口长度（毫秒）
-        ref_ms: 参考窗口长度（毫秒）
-        hi_band: 高频频带范围（Hz），用于检测杂音特征
-        ratio_db_thresh: 高频相对增益阈值（dB）
-        ratio_db_min: 高频相对增益最低要求（dB），用于过滤弱信号
-        flux_db_thresh: 瞬态变化阈值（dB）
-        score_thresh: 综合评分阈值，超过此值判定为有杂音
-        must_be_within_ms: 杂音必须出现在结尾多少毫秒内
+        model_path: 模型文件路径，默认为 "./noise_detector_model.pkl"
+        tail_ms: 检测尾部窗口长度（毫秒），默认200
+        ref_ms: 参考窗口长度（毫秒），默认300
+        hi_band: 高频频带范围（Hz），默认(5000, 15000)
+        fallback_to_v1: 模型加载失败时是否回退到v1版本，默认True
     
     Returns:
         dict: 包含检测结果的字典
             - has_chi: bool, 是否检测到杂音
-            - score: float, 综合评分
+            - probability: float, 模型预测的概率（0-1）
+            - method: str, 使用的检测方法（"ml" 或 "v1_fallback"）
+            - score: float, 综合评分（兼容v1格式，0-10）
             - ratio_db_peak: float, 高频相对增益峰值（dB）
             - flux_db_peak: float, 瞬态变化峰值（dB）
+            - features: dict, 提取的所有特征值（仅v2方法）
             - details: dict, 详细检测信息
     """
     # 根据输入类型加载音频
@@ -613,17 +764,14 @@ def detect_chi_noise(audio_input: Union[str, Path, bytes],
     else:
         y, sr = load_audio_from_path(audio_input)
     
-    # 调用核心检测函数
-    return detect_chi_noise_core(
+    # 调用核心检测函数（v2版本）
+    return detect_chi_noise_core_v2(
         y, sr,
+        model_path=model_path,
         tail_ms=tail_ms,
         ref_ms=ref_ms,
         hi_band=hi_band,
-        ratio_db_thresh=ratio_db_thresh,
-        ratio_db_min=ratio_db_min,
-        flux_db_thresh=flux_db_thresh,
-        score_thresh=score_thresh,
-        must_be_within_ms=must_be_within_ms
+        fallback_to_v1=fallback_to_v1
     )
 
 
@@ -683,6 +831,7 @@ if __name__ == "__main__":
     
     # 默认检测 outputs 目录
     test_dir = "./audio_noise_case"
+    # test_dir = "/Users/chen/Documents/zhetian/split/chapter_20/audio"
     if len(sys.argv) > 1:
         test_dir = sys.argv[1]
     
