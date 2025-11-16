@@ -825,33 +825,41 @@ def detect_chi_noise_batch(directory,
     }
 
 
-if __name__ == "__main__":
-    # 测试检测函数
-    import sys
+def test_detect_chi_noise_batch(test_dir: Union[str, Path] = "./audio_noise_case",
+                                model_path: Optional[Union[str, Path]] = None,
+                                tail_ms=200,
+                                ref_ms=300,
+                                hi_band=(5000, 15000),
+                                fallback_to_v1=True,
+                                verbose=True):
+    """
+    测试批量检测音频文件中的杂音
     
-    # 默认检测 outputs 目录
-    test_dir = "./audio_noise_case"
-    # test_dir = "/Users/chen/Documents/zhetian/split/chapter_20/audio"
-    if len(sys.argv) > 1:
-        test_dir = sys.argv[1]
+    Args:
+        test_dir: 测试目录路径
+        model_path: 模型文件路径，默认为 None（使用默认路径）
+        tail_ms: 检测尾部窗口长度（毫秒）
+        ref_ms: 参考窗口长度（毫秒）
+        hi_band: 高频频带范围（Hz）
+        fallback_to_v1: 模型加载失败时是否回退到v1版本
+        verbose: 是否打印详细信息
+    """
+    test_dir = Path(test_dir)
     
     print("=" * 80)
-    print("检测 WAV 文件结尾的 'chi' 杂音")
+    print("批量检测 WAV 文件结尾的 'chi' 杂音")
     print("=" * 80)
     print(f"检测目录: {test_dir}\n")
     
     # 批量检测
     batch_result = detect_chi_noise_batch(
         test_dir,
-        verbose=True,
-        tail_ms=200,
-        ref_ms=300,
-        hi_band=(5000, 15000),
-        ratio_db_thresh=5.5,
-        ratio_db_min=6.0,  # 降低以捕获弱杂音
-        flux_db_thresh=3.0,
-        score_thresh=4.0,  # 提高阈值以减少误检
-        must_be_within_ms=200  # 放宽以捕获边缘情况
+        verbose=verbose,
+        model_path=model_path,
+        tail_ms=tail_ms,
+        ref_ms=ref_ms,
+        hi_band=hi_band,
+        fallback_to_v1=fallback_to_v1
     )
     
     print("\n" + "=" * 80)
@@ -865,4 +873,86 @@ if __name__ == "__main__":
         print("\n检测到杂音的文件:")
         for f in batch_result['files_with_chi']:
             print(f"  - {Path(f).name}")
+    
+    return batch_result
+
+
+def test_detect_chi_noise(test_file: Union[str, Path],
+                          model_path: Optional[Union[str, Path]] = None,
+                          tail_ms=200,
+                          ref_ms=300,
+                          hi_band=(5000, 15000),
+                          fallback_to_v1=True):
+    """
+    测试单个音频文件的杂音检测
+    
+    Args:
+        test_file: 测试文件路径
+        model_path: 模型文件路径，默认为 None（使用默认路径）
+        tail_ms: 检测尾部窗口长度（毫秒）
+        ref_ms: 参考窗口长度（毫秒）
+        hi_band: 高频频带范围（Hz）
+        fallback_to_v1: 模型加载失败时是否回退到v1版本
+    
+    Returns:
+        dict: 检测结果
+    """
+    test_file = Path(test_file)
+    
+    if not test_file.exists():
+        print(f"错误: 文件不存在 - {test_file}")
+        return None
+    
+    print("=" * 80)
+    print("单个文件杂音检测测试")
+    print("=" * 80)
+    print(f"测试文件: {test_file}\n")
+    
+    # 检测单个文件
+    result = detect_chi_noise(
+        test_file,
+        model_path=model_path,
+        tail_ms=tail_ms,
+        ref_ms=ref_ms,
+        hi_band=hi_band,
+        fallback_to_v1=fallback_to_v1
+    )
+    
+    # 打印结果
+    print("检测结果:")
+    print(f"  是否有杂音: {'是' if result['has_chi'] else '否'}")
+    print(f"  检测方法: {result.get('method', 'unknown')}")
+    print(f"  评分: {result['score']:.2f}")
+    
+    if 'probability' in result:
+        print(f"  概率: {result['probability']:.4f}")
+    
+    print(f"  高频相对增益峰值: {result['ratio_db_peak']:.2f} dB")
+    print(f"  瞬态变化峰值: {result['flux_db_peak']:.2f} dB")
+    print(f"  距离结尾: {result.get('distance_from_end_ms', 0):.2f} ms")
+    print(f"  是否靠近结尾: {'是' if result.get('near_end', False) else '否'}")
+    
+    if 'features' in result:
+        print(f"\n特征数量: {len(result['features'])}")
+    
+    print("\n" + "=" * 80)
+    
+    return result
+
+
+if __name__ == "__main__":
+    # 测试配置
+    test_dir = "./audio_noise_case"
+    # test_dir = "/Users/chen/Documents/zhetian/split/chapter_20/audio"
+    
+    # 测试单个文件路径（可以手动指定，或留空自动查找）
+    test_file = "./audio_noise_case/chapter_13_audio_30.wav"  # 手动指定测试文件
+    
+    # 先测试单个文件
+    if test_file:
+        test_detect_chi_noise(test_file)
+    
+    # # 然后运行批量检测
+    # print("\n" + "=" * 80)
+    # test_detect_chi_noise_batch(test_dir)
 
