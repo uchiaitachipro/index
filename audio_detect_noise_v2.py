@@ -225,13 +225,12 @@ def detect_chi_noise_core(y: np.ndarray,
         }
     }
 
-
-def _extract_ml_features(y: np.ndarray, sr: int, tail_ms=200, ref_ms=300, hi_band=(5000, 15000)):
+def _extract_ml_features_v3(y: np.ndarray, sr: int, tail_ms=200, ref_ms=300, hi_band=(5000, 15000)):
     """
-    提取音频特征（用于机器学习）
+    提取音频特征（用于机器学习，V3版本，49个特征）
     
     Returns:
-        np.ndarray: 特征向量
+        np.ndarray: 特征向量（49个特征）
     """
     # 确保音频是单声道
     if y.ndim > 1:
@@ -426,7 +425,124 @@ def _extract_ml_features(y: np.ndarray, sr: int, tail_ms=200, ref_ms=300, hi_ban
     # 新增特征18: ratio_db序列的峰值位置（相对于尾部的位置）
     peak_position_in_tail = float(k_peak * hop / len(tail)) if len(tail) > 0 else 0.0
     
-    # 返回特征向量（扩展版）
+    # V3 新增特征1: 尾部前半部分和后半部分的能量比
+    tail_half = len(tail) // 2
+    tail_first_half_energy = float(np.sqrt(np.mean(tail[:tail_half]**2) + 1e-12))
+    tail_second_half_energy = float(np.sqrt(np.mean(tail[tail_half:]**2) + 1e-12))
+    energy_ratio_halfs = tail_second_half_energy / (tail_first_half_energy + 1e-12)
+    
+    # V3 新增特征2: 突然的能量上升（检测尾部能量突然增加）
+    if len(tail) > 10:
+        # 计算RMS能量序列（使用滑动窗口）
+        window_size = max(10, len(tail) // 20)
+        rms_seq = []
+        for i in range(0, len(tail) - window_size, window_size // 2):
+            window = tail[i:i+window_size]
+            rms_seq.append(np.sqrt(np.mean(window**2) + 1e-12))
+        if len(rms_seq) > 1:
+            rms_diff = np.diff(rms_seq)
+            sudden_energy_rise = float(np.max(rms_diff) / (np.mean(rms_seq) + 1e-12))
+        else:
+            sudden_energy_rise = 0.0
+    else:
+        sudden_energy_rise = 0.0
+    
+    # V3 新增特征3: 能量方差（衡量尾部能量的波动）
+    tail_energy_seq = np.abs(tail)**2
+    energy_variance = float(np.var(tail_energy_seq) + 1e-12)
+    
+    # V3 新增特征4: 突然截止的比例（检测音频是否突然停止）
+    # 计算最后10%的音频与之前90%的能量比
+    cutoff_point = int(len(tail) * 0.9)
+    if cutoff_point > 0 and cutoff_point < len(tail):
+        before_cutoff = tail[:cutoff_point]
+        after_cutoff = tail[cutoff_point:]
+        energy_before = float(np.sqrt(np.mean(before_cutoff**2) + 1e-12))
+        energy_after = float(np.sqrt(np.mean(after_cutoff**2) + 1e-12))
+        sudden_cutoff_ratio = energy_after / (energy_before + 1e-12)
+    else:
+        sudden_cutoff_ratio = 0.0
+    
+    # V3 新增特征5: 零交叉率变化率
+    if len(tail) > 20:
+        # 分段计算ZCR
+        segment_size = len(tail) // 5
+        zcr_segments = []
+        for i in range(0, len(tail) - segment_size, segment_size):
+            segment = tail[i:i+segment_size]
+            zcr_segments.append(librosa.feature.zero_crossing_rate(segment)[0].mean())
+        if len(zcr_segments) > 1:
+            zcr_diff = np.diff(zcr_segments)
+            zcr_change_rate = float(np.std(zcr_diff) + 1e-12)
+        else:
+            zcr_change_rate = 0.0
+    else:
+        zcr_change_rate = 0.0
+    
+    # V3 新增特征6-8: RMS梯度特征（检测能量变化趋势）
+    if len(tail) > 20:
+        # 计算RMS序列
+        rms_window = max(10, len(tail) // 30)
+        rms_gradient_seq = []
+        for i in range(0, len(tail) - rms_window, rms_window // 2):
+            window = tail[i:i+rms_window]
+            rms_gradient_seq.append(np.sqrt(np.mean(window**2) + 1e-12))
+        if len(rms_gradient_seq) > 1:
+            rms_gradients = np.diff(rms_gradient_seq)
+            max_rms_gradient = float(np.max(np.abs(rms_gradients)))
+            rms_gradient_mean = float(np.mean(rms_gradients))
+            rms_gradient_std = float(np.std(rms_gradients) + 1e-12)
+        else:
+            max_rms_gradient = 0.0
+            rms_gradient_mean = 0.0
+            rms_gradient_std = 0.0
+    else:
+        max_rms_gradient = 0.0
+        rms_gradient_mean = 0.0
+        rms_gradient_std = 0.0
+    
+    # V3 新增特征9: 尾部能量集中度比例（最后20%的能量占比）
+    tail_last_20_percent = int(len(tail) * 0.2)
+    if tail_last_20_percent > 0:
+        last_20_energy = float(np.sum(tail_energy[-tail_last_20_percent:]))
+        total_tail_energy = float(np.sum(tail_energy))
+        tail_energy_concentration_ratio = last_20_energy / (total_tail_energy + 1e-12)
+    else:
+        tail_energy_concentration_ratio = 0.0
+    
+    # V3 新增特征10: 频谱变化（检测频谱的突然变化）
+    if mag_tail.shape[1] > 1:
+        # 计算相邻帧之间的频谱差异
+        spectral_diff = np.diff(mag_tail, axis=1)
+        spectral_change = float(np.mean(np.abs(spectral_diff)) + 1e-12)
+    else:
+        spectral_change = 0.0
+    
+    # V3 新增特征11: 包络变化比例（检测音频包络的变化）
+    # 使用Hilbert变换计算包络
+    try:
+        from scipy.signal import hilbert
+        analytic_signal = hilbert(tail)
+        envelope = np.abs(analytic_signal)
+        if len(envelope) > 1:
+            envelope_diff = np.diff(envelope)
+            envelope_change_ratio = float(np.std(envelope_diff) / (np.mean(envelope) + 1e-12))
+        else:
+            envelope_change_ratio = 0.0
+    except ImportError:
+        # 如果没有scipy，使用简单的RMS作为包络
+        envelope_window = max(10, len(tail) // 20)
+        envelope = []
+        for i in range(0, len(tail), envelope_window):
+            window = tail[i:i+envelope_window]
+            envelope.append(np.sqrt(np.mean(window**2) + 1e-12))
+        if len(envelope) > 1:
+            envelope_diff = np.diff(envelope)
+            envelope_change_ratio = float(np.std(envelope_diff) / (np.mean(envelope) + 1e-12))
+        else:
+            envelope_change_ratio = 0.0
+    
+    # 返回特征向量（V3版本，49个特征）
     features = np.array([
         ratio_db_peak,
         ratio_db_mean,
@@ -468,12 +584,23 @@ def _extract_ml_features(y: np.ndarray, sr: int, tail_ms=200, ref_ms=300, hi_ban
         spectral_contrast_mean,
         last_20ms_ratio,
         peak_position_in_tail,
+        # V3 新增特征
+        energy_ratio_halfs,
+        sudden_energy_rise,
+        energy_variance,
+        sudden_cutoff_ratio,
+        zcr_change_rate,
+        max_rms_gradient,
+        rms_gradient_mean,
+        rms_gradient_std,
+        tail_energy_concentration_ratio,
+        spectral_change,
+        envelope_change_ratio,
     ])
     
     return features
 
-
-def detect_chi_noise_core_v2(y: np.ndarray,
+def detect_chi_noise_core_v3(y: np.ndarray,
                              sr: int,
                              model_path: Optional[Union[str, Path]] = None,
                              tail_ms=200,
@@ -481,15 +608,15 @@ def detect_chi_noise_core_v2(y: np.ndarray,
                              hi_band=(5000, 15000),
                              fallback_to_v1=True):
     """
-    检测音频数据结尾是否存在 "chi" 杂音（基于机器学习的版本）
+    检测音频数据结尾是否存在 "chi" 杂音（基于机器学习的版本，V3）
     
-    使用训练好的随机森林模型进行检测，相比硬编码阈值方法更加灵活和准确。
+    使用训练好的随机森林模型进行检测（V3版本，49个特征），相比硬编码阈值方法更加灵活和准确。
     模型会自动学习特征之间的复杂关系，无需手动调整阈值。
     
     Args:
         y: 音频数据数组（numpy array）
         sr: 采样率
-        model_path: 模型文件路径，默认为 "./noise_detector_model.pkl"
+        model_path: 模型文件路径，默认为 "./noise_detector_model_v3.pkl"
         tail_ms: 检测尾部窗口长度（毫秒）
         ref_ms: 参考窗口长度（毫秒）
         hi_band: 高频频带范围（Hz）
@@ -499,7 +626,7 @@ def detect_chi_noise_core_v2(y: np.ndarray,
         dict: 包含检测结果的字典
             - has_chi: bool, 是否检测到杂音
             - probability: float, 模型预测的概率（0-1）
-            - method: str, 使用的检测方法（"ml" 或 "v1_fallback"）
+            - method: str, 使用的检测方法（"ml_v3", "v1_fallback"）
             - score: float, 综合评分（兼容v1格式，0-10）
             - ratio_db_peak: float, 高频相对增益峰值（dB）
             - flux_db_peak: float, 瞬态变化峰值（dB）
@@ -515,9 +642,9 @@ def detect_chi_noise_core_v2(y: np.ndarray,
         else:
             raise ImportError("joblib not available. Install it with: pip install joblib scikit-learn")
     
-    # 加载模型
+    # 加载模型（V3版本）
     if model_path is None:
-        model_path = Path("./noise_detector_model.pkl")
+        model_path = Path("./noise_detector_model_v3.pkl")
     else:
         model_path = Path(model_path)
     
@@ -541,15 +668,15 @@ def detect_chi_noise_core_v2(y: np.ndarray,
         else:
             raise RuntimeError(f"Failed to load model: {e}")
     
-    # 提取特征
-    features = _extract_ml_features(y, sr, tail_ms=tail_ms, ref_ms=ref_ms, hi_band=hi_band)
+    # 提取特征（V3版本）
+    features = _extract_ml_features_v3(y, sr, tail_ms=tail_ms, ref_ms=ref_ms, hi_band=hi_band)
     features = features.reshape(1, -1)
     
     # 预测
     prediction = model.predict(features)[0]
     probabilities = model.predict_proba(features)[0]
     
-    # 获取特征名称（用于返回详细信息）
+    # 获取特征名称（V3版本，49个特征）
     feature_names = [
         'ratio_db_peak', 'ratio_db_mean', 'ratio_db_std', 'ratio_db_median',
         'flux_db_peak', 'flux_db_mean',
@@ -583,6 +710,18 @@ def detect_chi_noise_core_v2(y: np.ndarray,
         'spectral_contrast_mean',
         'last_20ms_ratio',
         'peak_position_in_tail',
+        # V3 新增特征名称
+        'energy_ratio_halfs',
+        'sudden_energy_rise',
+        'energy_variance',
+        'sudden_cutoff_ratio',
+        'zcr_change_rate',
+        'max_rms_gradient',
+        'rms_gradient_mean',
+        'rms_gradient_std',
+        'tail_energy_concentration_ratio',
+        'spectral_change',
+        'envelope_change_ratio',
     ]
     
     # 构建特征字典
@@ -604,7 +743,176 @@ def detect_chi_noise_core_v2(y: np.ndarray,
     return {
         "has_chi": bool(prediction == 1),
         "probability": float(probabilities[1]),  # 有杂音的概率
-        "method": "ml",
+        "method": "ml_v3",
+        "score": float(probabilities[1] * 10),  # 转换为0-10的分数，兼容v1格式
+        "ratio_db_peak": ratio_db_peak,
+        "flux_db_peak": flux_db_peak,
+        "flat_db": flat_db,
+        "rolloff_ratio": rolloff_ratio,
+        "crest_db": crest_db,
+        "rms_ratio": rms_ratio,
+        "over_ms": over_ms,
+        "near_end": bool(near_end),
+        "distance_from_end_ms": distance_from_end_ms,
+        "features": features_dict,
+        "details": {
+            "tail_ms": tail_ms,
+            "ref_ms": ref_ms,
+            "hi_band": hi_band,
+            "model_path": str(model_path),
+            "prediction": int(prediction),
+            "probabilities": {
+                "no_noise": float(probabilities[0]),
+                "has_noise": float(probabilities[1])
+            }
+        }
+    }
+
+
+def detect_chi_noise_core_v3_1(y: np.ndarray,
+                                sr: int,
+                                model_path: Optional[Union[str, Path]] = None,
+                                tail_ms=200,
+                                ref_ms=300,
+                                hi_band=(5000, 15000),
+                                fallback_to_v1=True):
+    """
+    检测音频数据结尾是否存在 "chi" 杂音（基于机器学习的版本，V3.1）
+    
+    使用训练好的随机森林模型进行检测（V3.1版本，49个特征），相比硬编码阈值方法更加灵活和准确。
+    模型会自动学习特征之间的复杂关系，无需手动调整阈值。
+    
+    Args:
+        y: 音频数据数组（numpy array）
+        sr: 采样率
+        model_path: 模型文件路径，默认为 "./noise_detector_model_v3.1.pkl"
+        tail_ms: 检测尾部窗口长度（毫秒）
+        ref_ms: 参考窗口长度（毫秒）
+        hi_band: 高频频带范围（Hz）
+        fallback_to_v1: 如果模型加载失败，是否回退到v1版本
+    
+    Returns:
+        dict: 包含检测结果的字典
+            - has_chi: bool, 是否检测到杂音
+            - probability: float, 模型预测的概率（0-1）
+            - method: str, 使用的检测方法（"ml_v3.1", "v1_fallback"）
+            - score: float, 综合评分（兼容v1格式，0-10）
+            - ratio_db_peak: float, 高频相对增益峰值（dB）
+            - flux_db_peak: float, 瞬态变化峰值（dB）
+            - features: dict, 提取的所有特征值
+            - details: dict, 详细检测信息
+    """
+    if not ML_AVAILABLE:
+        if fallback_to_v1:
+            result = detect_chi_noise_core(y, sr, tail_ms=tail_ms, ref_ms=ref_ms, hi_band=hi_band)
+            result["method"] = "v1_fallback"
+            result["probability"] = 1.0 if result["has_chi"] else 0.0
+            return result
+        else:
+            raise ImportError("joblib not available. Install it with: pip install joblib scikit-learn")
+    
+    # 加载模型（V3.1版本）
+    if model_path is None:
+        model_path = Path("./noise_detector_model_v3.1.pkl")
+    else:
+        model_path = Path(model_path)
+    
+    if not model_path.exists():
+        if fallback_to_v1:
+            result = detect_chi_noise_core(y, sr, tail_ms=tail_ms, ref_ms=ref_ms, hi_band=hi_band)
+            result["method"] = "v1_fallback"
+            result["probability"] = 1.0 if result["has_chi"] else 0.0
+            return result
+        else:
+            raise FileNotFoundError(f"Model file not found: {model_path}")
+    
+    try:
+        model = joblib.load(model_path)
+    except Exception as e:
+        if fallback_to_v1:
+            result = detect_chi_noise_core(y, sr, tail_ms=tail_ms, ref_ms=ref_ms, hi_band=hi_band)
+            result["method"] = "v1_fallback"
+            result["probability"] = 1.0 if result["has_chi"] else 0.0
+            return result
+        else:
+            raise RuntimeError(f"Failed to load model: {e}")
+    
+    # 提取特征（V3.1版本使用与V3相同的特征提取函数）
+    features = _extract_ml_features_v3(y, sr, tail_ms=tail_ms, ref_ms=ref_ms, hi_band=hi_band)
+    features = features.reshape(1, -1)
+    
+    # 预测
+    prediction = model.predict(features)[0]
+    probabilities = model.predict_proba(features)[0]
+    
+    # 获取特征名称（V3.1版本，49个特征，与V3相同）
+    feature_names = [
+        'ratio_db_peak', 'ratio_db_mean', 'ratio_db_std', 'ratio_db_median',
+        'flux_db_peak', 'flux_db_mean',
+        'flat_db', 'flat_mean',
+        'rolloff_ratio', 'rolloff_mean',
+        'rms_ratio',
+        'crest_db',
+        'zcr_ratio',
+        'mfcc_mean',
+        'over_ms',
+        'distance_from_end_ms',
+        'energy_concentration',
+        'ref_med', 'ref_mean', 'ref_std',
+        # 新增特征名称
+        'peak_position_ratio',
+        'last_50ms_ratio',
+        'hi_e_peak_position',
+        'spectral_centroid_mean',
+        'spectral_bandwidth_mean',
+        'hi_energy_ratio_mean',
+        'peak_surrounding_ratio',
+        'tail_dynamic_range',
+        'hi_e_variance',
+        'rise_rate',
+        'rms_ratio_last_100ms',
+        'peak_duration',
+        # 新增特征名称
+        'peak_to_mean_ratio',
+        'hi_e_concentration',
+        'decay_rate',
+        'spectral_contrast_mean',
+        'last_20ms_ratio',
+        'peak_position_in_tail',
+        # V3 新增特征名称
+        'energy_ratio_halfs',
+        'sudden_energy_rise',
+        'energy_variance',
+        'sudden_cutoff_ratio',
+        'zcr_change_rate',
+        'max_rms_gradient',
+        'rms_gradient_mean',
+        'rms_gradient_std',
+        'tail_energy_concentration_ratio',
+        'spectral_change',
+        'envelope_change_ratio',
+    ]
+    
+    # 构建特征字典
+    features_dict = {name: float(val) for name, val in zip(feature_names, features[0])}
+    
+    # 计算一些额外的统计信息（兼容v1的输出格式）
+    ratio_db_peak = features_dict['ratio_db_peak']
+    flux_db_peak = features_dict['flux_db_peak']
+    flat_db = features_dict['flat_db']
+    rolloff_ratio = features_dict['rolloff_ratio']
+    crest_db = features_dict['crest_db']
+    rms_ratio = features_dict['rms_ratio']
+    over_ms = features_dict['over_ms']
+    distance_from_end_ms = features_dict['distance_from_end_ms']
+    
+    # 判断是否靠近结尾（200ms内）
+    near_end = distance_from_end_ms <= 200.0
+    
+    return {
+        "has_chi": bool(prediction == 1),
+        "probability": float(probabilities[1]),  # 有杂音的概率
+        "method": "ml_v3.1",
         "score": float(probabilities[1] * 10),  # 转换为0-10的分数，兼容v1格式
         "ratio_db_peak": ratio_db_peak,
         "flux_db_peak": flux_db_peak,
@@ -636,20 +944,22 @@ def detect_chi_noise_batch_core(audio_data_list: List[Tuple[np.ndarray, int, str
     """
     批量检测音频数据（核心批量检测逻辑）
     
+    使用 V3.1 模型进行检测，如果失败则回退到 V1 版本。
+    
     Args:
         audio_data_list: 音频数据列表，每个元素为 (y, sr, name) 元组
             - y: 音频数据数组
             - sr: 采样率
             - name: 标识名称（用于输出）
         verbose: 是否打印详细信息
-        **detect_kwargs: 传递给 detect_chi_noise_core_v2 的其他参数
-            - model_path: Optional[Union[str, Path]], 模型文件路径
+        **detect_kwargs: 传递给检测函数的其他参数
+            - model_path: Optional[Union[str, Path]], 模型文件路径（V3.1模型）
             - tail_ms: int, 检测尾部窗口长度（毫秒），默认200
             - ref_ms: int, 参考窗口长度（毫秒），默认300
             - hi_band: tuple, 高频频带范围（Hz），默认(5000, 15000)
             - fallback_to_v1: bool, 模型加载失败时是否回退到v1版本，默认True
             注意：v1特有的参数（ratio_db_thresh, ratio_db_min, flux_db_thresh, score_thresh, must_be_within_ms）
-            会被自动过滤，不会传递给v2函数
+            会被自动过滤，不会传递给检测函数
     
     Returns:
         dict: 包含检测结果的字典
@@ -657,9 +967,9 @@ def detect_chi_noise_batch_core(audio_data_list: List[Tuple[np.ndarray, int, str
             - items_clean: list, 未检测到杂音的项目名称列表
             - results: dict, 每个项目的详细检测结果（key为name）
     """
-    # 过滤掉v1特有的参数，只保留v2支持的参数
-    v2_supported_params = {'model_path', 'tail_ms', 'ref_ms', 'hi_band', 'fallback_to_v1'}
-    v2_kwargs = {k: v for k, v in detect_kwargs.items() if k in v2_supported_params}
+    # 过滤掉v1特有的参数，只保留支持的参数
+    supported_params = {'model_path', 'tail_ms', 'ref_ms', 'hi_band', 'fallback_to_v1'}
+    detect_kwargs_filtered = {k: v for k, v in detect_kwargs.items() if k in supported_params}
     
     items_with_chi = []
     items_clean = []
@@ -667,7 +977,8 @@ def detect_chi_noise_batch_core(audio_data_list: List[Tuple[np.ndarray, int, str
     
     for y, sr, name in audio_data_list:
         try:
-            result = detect_chi_noise_core_v2(y, sr, **v2_kwargs)
+            # 优先使用 V3.1 模型
+            result = detect_chi_noise_core_v3_1(y, sr, **detect_kwargs_filtered)
             results[name] = result
             
             if result["has_chi"]:
@@ -735,13 +1046,13 @@ def detect_chi_noise(audio_input: Union[str, Path, bytes],
     """
     检测音频文件结尾是否存在 "chi" 杂音（封装函数，自动处理文件读取）
     
-    使用基于机器学习的检测方法（v2），相比硬编码阈值方法更加灵活和准确。
+    使用基于机器学习的检测方法（v3.1），相比硬编码阈值方法更加灵活和准确。
     
     Args:
         audio_input: 音频输入，可以是：
             - 文件路径（str 或 Path）
             - 字节数组（bytes，WAV 格式）
-        model_path: 模型文件路径，默认为 "./noise_detector_model.pkl"
+        model_path: 模型文件路径，默认为 "./noise_detector_model_v3.1.pkl"
         tail_ms: 检测尾部窗口长度（毫秒），默认200
         ref_ms: 参考窗口长度（毫秒），默认300
         hi_band: 高频频带范围（Hz），默认(5000, 15000)
@@ -751,11 +1062,11 @@ def detect_chi_noise(audio_input: Union[str, Path, bytes],
         dict: 包含检测结果的字典
             - has_chi: bool, 是否检测到杂音
             - probability: float, 模型预测的概率（0-1）
-            - method: str, 使用的检测方法（"ml" 或 "v1_fallback"）
+            - method: str, 使用的检测方法（"ml_v3.1" 或 "v1_fallback"）
             - score: float, 综合评分（兼容v1格式，0-10）
             - ratio_db_peak: float, 高频相对增益峰值（dB）
             - flux_db_peak: float, 瞬态变化峰值（dB）
-            - features: dict, 提取的所有特征值（仅v2方法）
+            - features: dict, 提取的所有特征值（仅v3.1方法）
             - details: dict, 详细检测信息
     """
     # 根据输入类型加载音频
@@ -764,8 +1075,8 @@ def detect_chi_noise(audio_input: Union[str, Path, bytes],
     else:
         y, sr = load_audio_from_path(audio_input)
     
-    # 调用核心检测函数（v2版本）
-    return detect_chi_noise_core_v2(
+    # 调用核心检测函数（v3.1版本）
+    return detect_chi_noise_core_v3_1(
         y, sr,
         model_path=model_path,
         tail_ms=tail_ms,
@@ -943,10 +1254,10 @@ def test_detect_chi_noise(test_file: Union[str, Path],
 if __name__ == "__main__":
     # 测试配置
     test_dir = "./audio_noise_case"
-    # test_dir = "/Users/chen/Documents/zhetian/split/chapter_20/audio"
+    test_dir = "/Users/chen/Documents/zhetian/split/chapter_787/audio"
     
     # 测试单个文件路径（可以手动指定，或留空自动查找）
-    test_file = "./audio_noise_case/chapter_13_audio_30.wav"  # 手动指定测试文件
+    test_file = "./audio_noise_case/chapter_13_audio_31.wav"  # 手动指定测试文件
     
     # 先测试单个文件
     if test_file:

@@ -11,7 +11,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-PORT=6006
+PORT=6006  # 默认端口
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONDA_ENV="py312"
 
@@ -178,6 +178,45 @@ check_requirements() {
     log_info "文件检查完成"
 }
 
+# 解析端口参数并过滤掉 --port 参数
+parse_port_and_args() {
+    local port=$PORT  # 默认端口
+    local remaining_args=()
+    local args=("$@")
+
+    # 解析命令行参数，提取 --port 参数
+    local i=0
+    while [[ $i -lt ${#args[@]} ]]; do
+        case "${args[$i]}" in
+            --port)
+                if [[ $((i+1)) -lt ${#args[@]} && "${args[$((i+1))]}" =~ ^[0-9]+$ ]]; then
+                    port="${args[$((i+1))]}"
+                    i=$((i+2))  # 跳过 --port 和端口值
+                else
+                    log_error "--port 参数需要指定端口号"
+                    exit 1
+                fi
+                ;;
+            --port=*)
+                port="${args[$i]#*=}"
+                if [[ ! "$port" =~ ^[0-9]+$ ]]; then
+                    log_error "--port 参数值必须是数字"
+                    exit 1
+                fi
+                i=$((i+1))
+                ;;
+            *)
+                remaining_args+=("${args[$i]}")
+                i=$((i+1))
+                ;;
+        esac
+    done
+
+    # 使用全局变量存储端口和剩余参数
+    PORT=$port
+    REMAINING_ARGS=("${remaining_args[@]}")
+}
+
 # 构建启动参数
 build_launch_args() {
     local args=()
@@ -242,6 +281,10 @@ main() {
     # 切换到脚本所在目录
     cd "${SCRIPT_DIR}"
 
+    # 0. 解析端口参数并过滤掉 --port 参数
+    parse_port_and_args "$@"
+    log_info "使用端口: ${PORT}"
+
     # 1. 检查必要文件
     check_requirements
 
@@ -251,8 +294,8 @@ main() {
     # 3. 激活 conda 环境
     activate_conda
 
-    # 4. 构建启动参数
-    local launch_args=$(build_launch_args "$@")
+    # 4. 构建启动参数（使用剩余参数，不包括已解析的 --port）
+    local launch_args=$(build_launch_args "${REMAINING_ARGS[@]}")
 
     # 5. 启动 api_server
     log_info "======================================"
@@ -262,10 +305,10 @@ main() {
     # 使用 uv run 或直接运行 python
     if command -v uv &> /dev/null; then
         log_info "使用 uv run 启动..."
-        uv run api_server.py ${launch_args}
+        uv run api_server.py --port ${PORT} ${launch_args}
     else
         log_info "使用 python 启动..."
-        python api_server.py ${launch_args}
+        python api_server.py --port ${PORT} ${launch_args}
     fi
 }
 

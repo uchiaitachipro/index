@@ -106,3 +106,13 @@ noise_1763208023003
 chapter_13_audio_30
 chapter_14_audio_4
 chapter_14_audio_13
+chapter_781_audio_22
+chapter_781_audio_77
+chapter_784_audio_8
+chapter_37_audio_70
+chapter_38_audio_30
+chapter_40_audio_34
+chapter_48_audio_4
+chapter_48_audio_42
+chapter_50_audio_18
+chapter_50_audio_84

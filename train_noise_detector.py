@@ -211,7 +211,124 @@ def extract_features(y: np.ndarray, sr: int, tail_ms=200, ref_ms=300, hi_band=(5
     # 新增特征18: ratio_db序列的峰值位置（相对于尾部的位置）
     peak_position_in_tail = float(k_peak * hop / len(tail)) if len(tail) > 0 else 0.0
     
-    # 返回特征向量（扩展版）
+    # V3 新增特征1: 尾部前半部分和后半部分的能量比
+    tail_half = len(tail) // 2
+    tail_first_half_energy = float(np.sqrt(np.mean(tail[:tail_half]**2) + 1e-12))
+    tail_second_half_energy = float(np.sqrt(np.mean(tail[tail_half:]**2) + 1e-12))
+    energy_ratio_halfs = tail_second_half_energy / (tail_first_half_energy + 1e-12)
+    
+    # V3 新增特征2: 突然的能量上升（检测尾部能量突然增加）
+    if len(tail) > 10:
+        # 计算RMS能量序列（使用滑动窗口）
+        window_size = max(10, len(tail) // 20)
+        rms_seq = []
+        for i in range(0, len(tail) - window_size, window_size // 2):
+            window = tail[i:i+window_size]
+            rms_seq.append(np.sqrt(np.mean(window**2) + 1e-12))
+        if len(rms_seq) > 1:
+            rms_diff = np.diff(rms_seq)
+            sudden_energy_rise = float(np.max(rms_diff) / (np.mean(rms_seq) + 1e-12))
+        else:
+            sudden_energy_rise = 0.0
+    else:
+        sudden_energy_rise = 0.0
+    
+    # V3 新增特征3: 能量方差（衡量尾部能量的波动）
+    tail_energy_seq = np.abs(tail)**2
+    energy_variance = float(np.var(tail_energy_seq) + 1e-12)
+    
+    # V3 新增特征4: 突然截止的比例（检测音频是否突然停止）
+    # 计算最后10%的音频与之前90%的能量比
+    cutoff_point = int(len(tail) * 0.9)
+    if cutoff_point > 0 and cutoff_point < len(tail):
+        before_cutoff = tail[:cutoff_point]
+        after_cutoff = tail[cutoff_point:]
+        energy_before = float(np.sqrt(np.mean(before_cutoff**2) + 1e-12))
+        energy_after = float(np.sqrt(np.mean(after_cutoff**2) + 1e-12))
+        sudden_cutoff_ratio = energy_after / (energy_before + 1e-12)
+    else:
+        sudden_cutoff_ratio = 0.0
+    
+    # V3 新增特征5: 零交叉率变化率
+    if len(tail) > 20:
+        # 分段计算ZCR
+        segment_size = len(tail) // 5
+        zcr_segments = []
+        for i in range(0, len(tail) - segment_size, segment_size):
+            segment = tail[i:i+segment_size]
+            zcr_segments.append(librosa.feature.zero_crossing_rate(segment)[0].mean())
+        if len(zcr_segments) > 1:
+            zcr_diff = np.diff(zcr_segments)
+            zcr_change_rate = float(np.std(zcr_diff) + 1e-12)
+        else:
+            zcr_change_rate = 0.0
+    else:
+        zcr_change_rate = 0.0
+    
+    # V3 新增特征6-8: RMS梯度特征（检测能量变化趋势）
+    if len(tail) > 20:
+        # 计算RMS序列
+        rms_window = max(10, len(tail) // 30)
+        rms_gradient_seq = []
+        for i in range(0, len(tail) - rms_window, rms_window // 2):
+            window = tail[i:i+rms_window]
+            rms_gradient_seq.append(np.sqrt(np.mean(window**2) + 1e-12))
+        if len(rms_gradient_seq) > 1:
+            rms_gradients = np.diff(rms_gradient_seq)
+            max_rms_gradient = float(np.max(np.abs(rms_gradients)))
+            rms_gradient_mean = float(np.mean(rms_gradients))
+            rms_gradient_std = float(np.std(rms_gradients) + 1e-12)
+        else:
+            max_rms_gradient = 0.0
+            rms_gradient_mean = 0.0
+            rms_gradient_std = 0.0
+    else:
+        max_rms_gradient = 0.0
+        rms_gradient_mean = 0.0
+        rms_gradient_std = 0.0
+    
+    # V3 新增特征9: 尾部能量集中度比例（最后20%的能量占比）
+    tail_last_20_percent = int(len(tail) * 0.2)
+    if tail_last_20_percent > 0:
+        last_20_energy = float(np.sum(tail_energy[-tail_last_20_percent:]))
+        total_tail_energy = float(np.sum(tail_energy))
+        tail_energy_concentration_ratio = last_20_energy / (total_tail_energy + 1e-12)
+    else:
+        tail_energy_concentration_ratio = 0.0
+    
+    # V3 新增特征10: 频谱变化（检测频谱的突然变化）
+    if mag_tail.shape[1] > 1:
+        # 计算相邻帧之间的频谱差异
+        spectral_diff = np.diff(mag_tail, axis=1)
+        spectral_change = float(np.mean(np.abs(spectral_diff)) + 1e-12)
+    else:
+        spectral_change = 0.0
+    
+    # V3 新增特征11: 包络变化比例（检测音频包络的变化）
+    # 使用Hilbert变换计算包络
+    try:
+        from scipy.signal import hilbert
+        analytic_signal = hilbert(tail)
+        envelope = np.abs(analytic_signal)
+        if len(envelope) > 1:
+            envelope_diff = np.diff(envelope)
+            envelope_change_ratio = float(np.std(envelope_diff) / (np.mean(envelope) + 1e-12))
+        else:
+            envelope_change_ratio = 0.0
+    except ImportError:
+        # 如果没有scipy，使用简单的RMS作为包络
+        envelope_window = max(10, len(tail) // 20)
+        envelope = []
+        for i in range(0, len(tail), envelope_window):
+            window = tail[i:i+envelope_window]
+            envelope.append(np.sqrt(np.mean(window**2) + 1e-12))
+        if len(envelope) > 1:
+            envelope_diff = np.diff(envelope)
+            envelope_change_ratio = float(np.std(envelope_diff) / (np.mean(envelope) + 1e-12))
+        else:
+            envelope_change_ratio = 0.0
+    
+    # 返回特征向量（V3版本，49个特征）
     features = [
         ratio_db_peak,
         ratio_db_mean,
@@ -253,6 +370,18 @@ def extract_features(y: np.ndarray, sr: int, tail_ms=200, ref_ms=300, hi_band=(5
         spectral_contrast_mean,
         last_20ms_ratio,
         peak_position_in_tail,
+        # V3 新增特征
+        energy_ratio_halfs,
+        sudden_energy_rise,
+        energy_variance,
+        sudden_cutoff_ratio,
+        zcr_change_rate,
+        max_rms_gradient,
+        rms_gradient_mean,
+        rms_gradient_std,
+        tail_energy_concentration_ratio,
+        spectral_change,
+        envelope_change_ratio,
     ]
     
     return features
@@ -380,6 +509,18 @@ if __name__ == "__main__":
         'spectral_contrast_mean',
         'last_20ms_ratio',
         'peak_position_in_tail',
+        # V3 新增特征名称
+        'energy_ratio_halfs',
+        'sudden_energy_rise',
+        'energy_variance',
+        'sudden_cutoff_ratio',
+        'zcr_change_rate',
+        'max_rms_gradient',
+        'rms_gradient_mean',
+        'rms_gradient_std',
+        'tail_energy_concentration_ratio',
+        'spectral_change',
+        'envelope_change_ratio',
     ]
     
     importances = model.feature_importances_
@@ -389,17 +530,18 @@ if __name__ == "__main__":
     for i in range(min(10, len(indices))):
         print(f"  {i+1}. {feature_names[indices[i]]}: {importances[indices[i]]:.4f}")
     
-    # 保存模型
-    model_path = Path("./noise_detector_model.pkl")
+    # 保存模型（V3.1版本）
+    model_path = Path("./noise_detector_model_v3.1.pkl")
     joblib.dump(model, model_path)
     print(f"\n模型已保存到: {model_path}")
     
-    # 保存特征名称
+    # 保存特征名称（V3.1版本）
     feature_info = {
         'feature_names': feature_names,
-        'n_features': len(feature_names)
+        'n_features': len(feature_names),
+        'version': 'v3.1'
     }
-    with open('./noise_detector_features.json', 'w') as f:
+    with open('./noise_detector_features_v3.1.json', 'w') as f:
         json.dump(feature_info, f, indent=2)
-    print(f"特征信息已保存到: noise_detector_features.json")
+    print(f"特征信息已保存到: noise_detector_features_v3.1.json")
 
