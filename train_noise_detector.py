@@ -530,18 +530,18 @@ if __name__ == "__main__":
     for i in range(min(10, len(indices))):
         print(f"  {i+1}. {feature_names[indices[i]]}: {importances[indices[i]]:.4f}")
     
-    # 保存模型（V3.1版本）
-    model_path = Path("./noise_detector_model_v3.1.pkl")
+    # 保存模型（V3.3版本）
+    model_path = Path("./noise_detector_model_v3.3.pkl")
     joblib.dump(model, model_path)
     print(f"\n模型已保存到: {model_path}")
     
-    # 保存特征名称（V3.1版本）
+    # 保存特征名称（V3.3版本）
     feature_info = {
         'feature_names': feature_names,
         'n_features': len(feature_names),
-        'version': 'v3.1'
+        'version': 'v3.3'
     }
-    with open('./noise_detector_features_v3.1.json', 'w') as f:
+    with open('./noise_detector_features_v3.3.json', 'w') as f:
         json.dump(feature_info, f, indent=2)
-    print(f"特征信息已保存到: noise_detector_features_v3.1.json")
+    print(f"特征信息已保存到: noise_detector_features_v3.3.json")
 
