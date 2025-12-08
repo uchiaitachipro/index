@@ -2151,7 +2151,7 @@ def test_detect_chi_noise(test_file: Union[str, Path],
 if __name__ == "__main__":
     # 测试配置
     test_dir = "./audio_noise_case"
-    test_dir = "/Users/chen/Documents/zhetian/split/chapter_85/audio"
+    test_dir = "/Users/chen/Documents/zhetian/split/chapter_9/audio"
     
     # 测试单个文件路径（可以手动指定，或留空自动查找）
     test_file = "./audio_noise_case/chapter_13_audio_31.wav"  # 手动指定测试文件
