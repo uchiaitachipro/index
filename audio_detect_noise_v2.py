@@ -21,6 +21,26 @@ except ImportError:
     ML_AVAILABLE = False
     joblib = None
 
+# 缓存变量（用于加速重复调用）
+_cached_model = None           # 缓存的模型
+_cached_model_path = None      # 缓存的模型路径
+_cached_extract_func = None    # 缓存的特征提取函数
+
+
+def clear_detection_cache():
+    """
+    清除检测相关的缓存（模型和特征提取函数）
+    
+    在以下情况下可能需要调用：
+    - 更新了模型文件
+    - 更新了训练脚本中的特征提取函数
+    - 需要释放内存
+    """
+    global _cached_model, _cached_model_path, _cached_extract_func
+    _cached_model = None
+    _cached_model_path = None
+    _cached_extract_func = None
+
 
 def detect_chi_noise_core(y: np.ndarray,
                           sr: int,
@@ -231,14 +251,21 @@ def _extract_ml_features_v4_3(y: np.ndarray, sr: int, tail_ms=200, ref_ms=300, h
     
     此函数与 train_noise_detector_v4_3.py 中的 extract_features_v4_3 保持一致。
     优先从训练脚本导入，确保特征提取逻辑完全一致。
+    使用缓存机制避免重复导入。
     
     Returns:
-        np.ndarray: 特征向量（85个特征）
+        np.ndarray: 特征向量（105个特征）
     """
-    # 优先尝试从训练脚本导入（如果可用）
+    global _cached_extract_func
+    
+    # 如果已经缓存了特征提取函数，直接使用
+    if _cached_extract_func is not None:
+        features = _cached_extract_func(y, sr, tail_ms=tail_ms, ref_ms=ref_ms, hi_band=hi_band)
+        return np.array(features)
+    
+    # 首次调用时导入并缓存
     try:
         import importlib.util
-        import os
         # 获取当前文件所在目录
         current_dir = os.path.dirname(os.path.abspath(__file__))
         train_script_path = os.path.join(current_dir, "train_noise_detector_v4_3.py")
@@ -249,7 +276,9 @@ def _extract_ml_features_v4_3(y: np.ndarray, sr: int, tail_ms=200, ref_ms=300, h
                 train_module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(train_module)
                 if hasattr(train_module, 'extract_features_v4_3'):
-                    features = train_module.extract_features_v4_3(y, sr, tail_ms=tail_ms, ref_ms=ref_ms, hi_band=hi_band)
+                    # 缓存特征提取函数
+                    _cached_extract_func = train_module.extract_features_v4_3
+                    features = _cached_extract_func(y, sr, tail_ms=tail_ms, ref_ms=ref_ms, hi_band=hi_band)
                     return np.array(features)
     except Exception as e:
         # 如果导入失败，抛出清晰的错误信息
@@ -299,6 +328,8 @@ def detect_chi_noise_core_v4_3(y: np.ndarray,
             - features: dict, 提取的所有特征值
             - details: dict, 详细检测信息
     """
+    global _cached_model, _cached_model_path
+    
     if not ML_AVAILABLE:
         if fallback_to_v1:
             result = detect_chi_noise_core(y, sr, tail_ms=tail_ms, ref_ms=ref_ms, hi_band=hi_band)
@@ -308,11 +339,14 @@ def detect_chi_noise_core_v4_3(y: np.ndarray,
         else:
             raise ImportError("joblib not available. Install it with: pip install joblib scikit-learn")
     
-    # 加载模型（V4.3版本）
+    # 加载模型（V4.3版本，使用缓存）
     if model_path is None:
         model_path = Path("./noise_detector_model_v4_3.pkl")
     else:
         model_path = Path(model_path)
+    
+    # 将路径转换为绝对路径以便正确比较
+    model_path_abs = model_path.resolve()
     
     if not model_path.exists():
         if fallback_to_v1:
@@ -323,16 +357,23 @@ def detect_chi_noise_core_v4_3(y: np.ndarray,
         else:
             raise FileNotFoundError(f"Model file not found: {model_path}")
     
-    try:
-        model = joblib.load(model_path)
-    except Exception as e:
-        if fallback_to_v1:
-            result = detect_chi_noise_core(y, sr, tail_ms=tail_ms, ref_ms=ref_ms, hi_band=hi_band)
-            result["method"] = "v1_fallback"
-            result["probability"] = 1.0 if result["has_chi"] else 0.0
-            return result
-        else:
-            raise RuntimeError(f"Failed to load model: {e}")
+    # 使用缓存的模型（如果路径相同）
+    if _cached_model is not None and _cached_model_path == str(model_path_abs):
+        model = _cached_model
+    else:
+        try:
+            model = joblib.load(model_path)
+            # 缓存模型
+            _cached_model = model
+            _cached_model_path = str(model_path_abs)
+        except Exception as e:
+            if fallback_to_v1:
+                result = detect_chi_noise_core(y, sr, tail_ms=tail_ms, ref_ms=ref_ms, hi_band=hi_band)
+                result["method"] = "v1_fallback"
+                result["probability"] = 1.0 if result["has_chi"] else 0.0
+                return result
+            else:
+                raise RuntimeError(f"Failed to load model: {e}")
     
     # 提取特征（V4.3版本使用105个特征）
     features = _extract_ml_features_v4_3(y, sr, tail_ms=tail_ms, ref_ms=ref_ms, hi_band=hi_band)
@@ -775,7 +816,7 @@ def test_detect_chi_noise(test_file: Union[str, Path],
 if __name__ == "__main__":
     # 测试配置
     test_dir = "./audio_noise_case"
-    test_dir = "/Users/chen/Documents/zhetian/split/chapter_156/audio"
+    test_dir = "/Users/chen/Documents/zhetian/split/chapter_159/audio"
     
     # 测试单个文件路径（可以手动指定，或留空自动查找）
     test_file = "./audio_noise_case/chapter_13_audio_31.wav"  # 手动指定测试文件
