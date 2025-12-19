@@ -225,11 +225,11 @@ def detect_chi_noise_core(y: np.ndarray,
         }
     }
 
-def _extract_ml_features_v4_2(y: np.ndarray, sr: int, tail_ms=200, ref_ms=300, hi_band=(5000, 15000)):
+def _extract_ml_features_v4_3(y: np.ndarray, sr: int, tail_ms=200, ref_ms=300, hi_band=(5000, 15000)):
     """
-    提取音频特征（用于机器学习，V4.2版本，85个特征）
+    提取音频特征（用于机器学习，V4.3版本，105个特征）
     
-    此函数与 train_noise_detector_v4_2.py 中的 extract_features_v4_2 保持一致。
+    此函数与 train_noise_detector_v4_3.py 中的 extract_features_v4_3 保持一致。
     优先从训练脚本导入，确保特征提取逻辑完全一致。
     
     Returns:
@@ -241,32 +241,32 @@ def _extract_ml_features_v4_2(y: np.ndarray, sr: int, tail_ms=200, ref_ms=300, h
         import os
         # 获取当前文件所在目录
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        train_script_path = os.path.join(current_dir, "train_noise_detector_v4_2.py")
+        train_script_path = os.path.join(current_dir, "train_noise_detector_v4_3.py")
         
         if os.path.exists(train_script_path):
-            spec = importlib.util.spec_from_file_location("train_v4_2", train_script_path)
+            spec = importlib.util.spec_from_file_location("train_v4_3", train_script_path)
             if spec and spec.loader:
                 train_module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(train_module)
-                if hasattr(train_module, 'extract_features_v4_2'):
-                    features = train_module.extract_features_v4_2(y, sr, tail_ms=tail_ms, ref_ms=ref_ms, hi_band=hi_band)
+                if hasattr(train_module, 'extract_features_v4_3'):
+                    features = train_module.extract_features_v4_3(y, sr, tail_ms=tail_ms, ref_ms=ref_ms, hi_band=hi_band)
                     return np.array(features)
     except Exception as e:
         # 如果导入失败，抛出清晰的错误信息
         raise RuntimeError(
-            f"无法从 train_noise_detector_v4_2.py 导入 extract_features_v4_2 函数。"
+            f"无法从 train_noise_detector_v4_3.py 导入 extract_features_v4_3 函数。"
             f"错误: {e}\n"
-            f"请确保 train_noise_detector_v4_2.py 文件存在且包含 extract_features_v4_2 函数。"
+            f"请确保 train_noise_detector_v4_3.py 文件存在且包含 extract_features_v4_3 函数。"
         )
     
     # 如果文件不存在，抛出错误
     raise FileNotFoundError(
-        "train_noise_detector_v4_2.py 文件不存在。"
+        "train_noise_detector_v4_3.py 文件不存在。"
         "请确保该文件与 audio_detect_noise_v2.py 在同一目录下。"
     )
 
 
-def detect_chi_noise_core_v4_2(y: np.ndarray,
+def detect_chi_noise_core_v4_3(y: np.ndarray,
                                 sr: int,
                                 model_path: Optional[Union[str, Path]] = None,
                                 tail_ms=200,
@@ -274,15 +274,15 @@ def detect_chi_noise_core_v4_2(y: np.ndarray,
                                 hi_band=(5000, 15000),
                                 fallback_to_v1=True):
     """
-    检测音频数据结尾是否存在 "chi" 杂音（基于机器学习的版本，V4.2）
+    检测音频数据结尾是否存在 "chi" 杂音（基于机器学习的版本，V4.3）
     
-    使用训练好的随机森林模型进行检测（V4.2版本，85个特征），相比硬编码阈值方法更加灵活和准确。
+    使用训练好的随机森林模型进行检测（V4.3版本，105个特征），相比硬编码阈值方法更加灵活和准确。
     模型会自动学习特征之间的复杂关系，无需手动调整阈值。
     
     Args:
         y: 音频数据数组（numpy array）
         sr: 采样率
-        model_path: 模型文件路径，默认为 "./noise_detector_model_v4_2.pkl"
+        model_path: 模型文件路径，默认为 "./noise_detector_model_v4_3.pkl"
         tail_ms: 检测尾部窗口长度（毫秒）
         ref_ms: 参考窗口长度（毫秒）
         hi_band: 高频频带范围（Hz）
@@ -292,7 +292,7 @@ def detect_chi_noise_core_v4_2(y: np.ndarray,
         dict: 包含检测结果的字典
             - has_chi: bool, 是否检测到杂音
             - probability: float, 模型预测的概率（0-1）
-            - method: str, 使用的检测方法（"ml_v4.2", "v1_fallback"）
+            - method: str, 使用的检测方法（"ml_v4.3", "v1_fallback"）
             - score: float, 综合评分（兼容v1格式，0-10）
             - ratio_db_peak: float, 高频相对增益峰值（dB）
             - flux_db_peak: float, 瞬态变化峰值（dB）
@@ -308,9 +308,9 @@ def detect_chi_noise_core_v4_2(y: np.ndarray,
         else:
             raise ImportError("joblib not available. Install it with: pip install joblib scikit-learn")
     
-    # 加载模型（V4.2版本）
+    # 加载模型（V4.3版本）
     if model_path is None:
-        model_path = Path("./noise_detector_model_v4_2.pkl")
+        model_path = Path("./noise_detector_model_v4_3.pkl")
     else:
         model_path = Path(model_path)
     
@@ -334,15 +334,15 @@ def detect_chi_noise_core_v4_2(y: np.ndarray,
         else:
             raise RuntimeError(f"Failed to load model: {e}")
     
-    # 提取特征（V4.2版本使用85个特征）
-    features = _extract_ml_features_v4_2(y, sr, tail_ms=tail_ms, ref_ms=ref_ms, hi_band=hi_band)
+    # 提取特征（V4.3版本使用105个特征）
+    features = _extract_ml_features_v4_3(y, sr, tail_ms=tail_ms, ref_ms=ref_ms, hi_band=hi_band)
     features = features.reshape(1, -1)
     
     # 预测
     prediction = model.predict(features)[0]
     probabilities = model.predict_proba(features)[0]
     
-    # 获取特征名称（V4.2版本，85个特征）
+    # 获取特征名称（V4.3版本，105个特征）
     feature_names = [
         'ratio_db_peak', 'ratio_db_mean', 'ratio_db_std', 'ratio_db_median',
         'flux_db_peak', 'flux_db_mean',
@@ -374,6 +374,14 @@ def detect_chi_noise_core_v4_2(y: np.ndarray,
         'peak_hi_e_linear', 'energy_ratio_last_1_percent', 'peak_width_ms',
         'tail_energy_entropy', 'peak_distance_from_end_abs', 'hi_e_peak_mean_diff',
         'peak_count',
+        # V4.3新增20个特征名称
+        'last_2ms_ratio', 'last_2ms_to_10ms_ratio', 'energy_ratio_5_95',
+        'hi_e_accel_max', 'ratio_db_range', 'zcr_ratio_20_80',
+        'hi_e_mean_ratio', 'post_peak_decay', 'tail_energy_std',
+        'tail_energy_skewness', 'pre_post_diff', 'hi_e_p90_p50_ratio',
+        'spectral_centroid_change_30ms', 'positive_ratio', 'hi_e_cv',
+        'tail_autocorr', 'local_energy_ratio', 'rms_max_min_ratio',
+        'hi_e_range_mean_ratio', 'last_15ms_ratio',
     ]
     
     # 构建特征字典
@@ -395,7 +403,7 @@ def detect_chi_noise_core_v4_2(y: np.ndarray,
     return {
         "has_chi": bool(prediction == 1),
         "probability": float(probabilities[1]),  # 有杂音的概率
-        "method": "ml_v4.2",
+        "method": "ml_v4.3",
         "score": float(probabilities[1] * 10),  # 转换为0-10的分数，兼容v1格式
         "ratio_db_peak": ratio_db_peak,
         "flux_db_peak": flux_db_peak,
@@ -427,7 +435,7 @@ def detect_chi_noise_batch_core(audio_data_list: List[Tuple[np.ndarray, int, str
     """
     批量检测音频数据（核心批量检测逻辑）
     
-    使用 V4.2 模型进行检测，如果失败则回退到 V1 版本。
+    使用 V4.3 模型进行检测，如果失败则回退到 V1 版本。
     
     Args:
         audio_data_list: 音频数据列表，每个元素为 (y, sr, name) 元组
@@ -436,7 +444,7 @@ def detect_chi_noise_batch_core(audio_data_list: List[Tuple[np.ndarray, int, str
             - name: 标识名称（用于输出）
         verbose: 是否打印详细信息
         **detect_kwargs: 传递给检测函数的其他参数
-            - model_path: Optional[Union[str, Path]], 模型文件路径（V4.2模型，默认使用v4_2）
+            - model_path: Optional[Union[str, Path]], 模型文件路径（V4.3模型，默认使用v4_3）
             - tail_ms: int, 检测尾部窗口长度（毫秒），默认200
             - ref_ms: int, 参考窗口长度（毫秒），默认300
             - hi_band: tuple, 高频频带范围（Hz），默认(5000, 15000)
@@ -454,9 +462,9 @@ def detect_chi_noise_batch_core(audio_data_list: List[Tuple[np.ndarray, int, str
     supported_params = {'model_path', 'tail_ms', 'ref_ms', 'hi_band', 'fallback_to_v1'}
     detect_kwargs_filtered = {k: v for k, v in detect_kwargs.items() if k in supported_params}
     
-    # 如果没有指定model_path，默认使用V4.2模型
+    # 如果没有指定model_path，默认使用V4.3模型
     if 'model_path' not in detect_kwargs_filtered or detect_kwargs_filtered['model_path'] is None:
-        detect_kwargs_filtered['model_path'] = Path("./noise_detector_model_v4_2.pkl")
+        detect_kwargs_filtered['model_path'] = Path("./noise_detector_model_v4_3.pkl")
     
     items_with_chi = []
     items_clean = []
@@ -464,11 +472,11 @@ def detect_chi_noise_batch_core(audio_data_list: List[Tuple[np.ndarray, int, str
     
     for y, sr, name in audio_data_list:
         try:
-            # 优先使用 V4.2 模型，如果失败则直接回退到 V1
+            # 优先使用 V4.3 模型，如果失败则直接回退到 V1
             try:
-                result = detect_chi_noise_core_v4_2(y, sr, **detect_kwargs_filtered)
+                result = detect_chi_noise_core_v4_3(y, sr, **detect_kwargs_filtered)
             except (FileNotFoundError, RuntimeError):
-                # 如果V4.2模型不存在或加载失败，直接回退到V1
+                # 如果V4.3模型不存在或加载失败，直接回退到V1
                 if detect_kwargs_filtered.get('fallback_to_v1', True):
                     result = detect_chi_noise_core(y, sr, tail_ms=detect_kwargs_filtered.get('tail_ms', 200),
                                                   ref_ms=detect_kwargs_filtered.get('ref_ms', 300),
@@ -544,14 +552,14 @@ def detect_chi_noise(audio_input: Union[str, Path, bytes],
     """
     检测音频文件结尾是否存在 "chi" 杂音（封装函数，自动处理文件读取）
     
-    使用基于机器学习的检测方法（v4.2版本），相比硬编码阈值方法更加灵活和准确。
-    如果V4.2模型不可用，会自动回退到V1版本。
+    使用基于机器学习的检测方法（v4.3版本），相比硬编码阈值方法更加灵活和准确。
+    如果V4.3模型不可用，会自动回退到V1版本。
     
     Args:
         audio_input: 音频输入，可以是：
             - 文件路径（str 或 Path）
             - 字节数组（bytes，WAV 格式）
-        model_path: 模型文件路径，默认为 "./noise_detector_model_v4_2.pkl"
+        model_path: 模型文件路径，默认为 "./noise_detector_model_v4_3.pkl"
         tail_ms: 检测尾部窗口长度（毫秒），默认200
         ref_ms: 参考窗口长度（毫秒），默认300
         hi_band: 高频频带范围（Hz），默认(5000, 15000)
@@ -561,7 +569,7 @@ def detect_chi_noise(audio_input: Union[str, Path, bytes],
         dict: 包含检测结果的字典
             - has_chi: bool, 是否检测到杂音
             - probability: float, 模型预测的概率（0-1）
-            - method: str, 使用的检测方法（"ml_v4.2" 或 "v1_fallback"）
+            - method: str, 使用的检测方法（"ml_v4.3" 或 "v1_fallback"）
             - score: float, 综合评分（兼容v1格式，0-10）
             - ratio_db_peak: float, 高频相对增益峰值（dB）
             - flux_db_peak: float, 瞬态变化峰值（dB）
@@ -574,13 +582,13 @@ def detect_chi_noise(audio_input: Union[str, Path, bytes],
     else:
         y, sr = load_audio_from_path(audio_input)
     
-    # 如果没有指定model_path，默认使用V4.2模型
+    # 如果没有指定model_path，默认使用V4.3模型
     if model_path is None:
-        model_path = Path("./noise_detector_model_v4_2.pkl")
+        model_path = Path("./noise_detector_model_v4_3.pkl")
     
-    # 优先使用 V4.2 模型，如果失败则直接回退到 V1
+    # 优先使用 V4.3 模型，如果失败则直接回退到 V1
     try:
-        return detect_chi_noise_core_v4_2(
+        return detect_chi_noise_core_v4_3(
             y, sr,
             model_path=model_path,
             tail_ms=tail_ms,
@@ -589,7 +597,7 @@ def detect_chi_noise(audio_input: Union[str, Path, bytes],
             fallback_to_v1=fallback_to_v1
         )
     except (FileNotFoundError, RuntimeError):
-        # 如果V4.2模型不存在或加载失败，直接回退到V1
+        # 如果V4.3模型不存在或加载失败，直接回退到V1
         if fallback_to_v1:
             result = detect_chi_noise_core(y, sr, tail_ms=tail_ms, ref_ms=ref_ms, hi_band=hi_band)
             result["method"] = "v1_fallback"
@@ -767,7 +775,7 @@ def test_detect_chi_noise(test_file: Union[str, Path],
 if __name__ == "__main__":
     # 测试配置
     test_dir = "./audio_noise_case"
-    test_dir = "/Users/chen/Documents/zhetian/split/chapter_111/audio"
+    test_dir = "/Users/chen/Documents/zhetian/split/chapter_156/audio"
     
     # 测试单个文件路径（可以手动指定，或留空自动查找）
     test_file = "./audio_noise_case/chapter_13_audio_31.wav"  # 手动指定测试文件

@@ -1190,3 +1190,15 @@ chapter_106_audio_19
 chapter_108_audio_7
 chapter_108_audio_44
 chapter_108_audio_82
+chapter_114_audio_143
+chapter_120_audio_103
+chapter_130_audio_31
+chapter_132_audio_63
+chapter_132_audio_77
+chapter_133_audio_1
+chapter_133_audio_14
+chapter_138_audio_24
+chapter_138_audio_41
+chapter_138_audio_54
+chapter_141_audio_43
+chapter_141_audio_161
