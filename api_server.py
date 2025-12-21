@@ -2,6 +2,8 @@ import os
 import asyncio
 import io
 import base64
+import zipfile
+import shutil
 from tabnanny import verbose
 import traceback
 from fastapi import FastAPI, Request, Response, File, UploadFile, Form
@@ -23,6 +25,7 @@ from text_spilter import split_text_by_characters
 
 tts = None
 api_verbose = False
+api_diagnose_mode = False
 
 # 说话人音频查找配置
 SPEAKER_AUDIO_DIRS = [
@@ -97,6 +100,71 @@ def find_speaker_audio(sex: str, name: str) -> Optional[str]:
     return None
 
 
+def save_diagnose_data_to_zip(
+    diagnose_output_dir: str,
+    wav_bytes: bytes,
+    noise_result: dict,
+    text: str,
+    speaker: str,
+    emotion: str,
+    retry: int
+) -> Optional[str]:
+    """
+    将诊断数据和音频保存到 zip 文件
+    
+    Args:
+        diagnose_output_dir: 诊断输出目录路径
+        wav_bytes: 生成的音频字节数据
+        noise_result: 杂音检测结果
+        text: 文本内容
+        speaker: 说话人名称
+        emotion: 情感
+        retry: 重试次数
+        
+    Returns:
+        zip 文件路径，失败则返回 None
+    """
+    if not diagnose_output_dir or not os.path.isdir(diagnose_output_dir):
+        return None
+    
+    diag_timestamp = int(time.time() * 1000)
+    zip_dir = "uploads/diagnose"
+    os.makedirs(zip_dir, exist_ok=True)
+    zip_path = f"{zip_dir}/{diag_timestamp}.zip"
+    
+    try:
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+            # 添加诊断目录中的所有文件
+            for root, dirs, files in os.walk(diagnose_output_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.relpath(file_path, diagnose_output_dir)
+                    zf.write(file_path, arcname)
+            
+            # 添加当前生成的音频文件
+            zf.writestr("generated_audio.wav", wav_bytes)
+            
+            # 添加杂音检测结果
+            noise_info = {
+                "noise_result": noise_result,
+                "text": text,
+                "speaker": speaker,
+                "emotion": emotion,
+                "retry": retry
+            }
+            zf.writestr("noise_detection.json", json.dumps(noise_info, ensure_ascii=False, indent=2))
+        
+        print(f"    诊断数据已保存到 {zip_path}")
+        
+        # 清理诊断输出目录
+        shutil.rmtree(diagnose_output_dir, ignore_errors=True)
+        
+        return zip_path
+    except Exception as zip_error:
+        print(f"    警告: 保存诊断数据失败: {str(zip_error)}")
+        return None
+
+
 def find_speaker_audio_with_emotion(
     sex: str, 
     name: str, 
@@ -163,6 +231,8 @@ async def lifespan(app: FastAPI):
     )
     global api_verbose
     api_verbose = args.verbose
+    global api_diagnose_mode
+    api_diagnose_mode = args.diagnose_mode
     yield
 
 
@@ -430,7 +500,8 @@ async def _process_story_audio_generation(story_data: list, custom_voice_map: Op
                         use_emo_text=False,
                         use_random=False,
                         max_text_tokens_per_segment=120,
-                        verbose=api_verbose
+                        verbose=api_verbose,
+                        return_diagnose=api_diagnose_mode
                     )
                 
                 result = await loop.run_in_executor(None, infer_tts)
@@ -471,6 +542,20 @@ async def _process_story_audio_generation(story_data: list, custom_voice_map: Op
                             with open(save_audio_path, "wb") as f:
                                 f.write(wav_bytes)
                             print(f"    警告: 检测到杂音，已保存到 {save_audio_path}")
+                        
+                        # 如果启用了诊断模式，保存诊断数据和音频到 zip 文件
+                        if api_diagnose_mode:
+                            diagnose_data = result.get('diagnose', {})
+                            diagnose_output_dir = diagnose_data.get('output_dir', '')
+                            save_diagnose_data_to_zip(
+                                diagnose_output_dir=diagnose_output_dir,
+                                wav_bytes=wav_bytes,
+                                noise_result=noise_result,
+                                text=text,
+                                speaker=name if name else "旁白",
+                                emotion=emotion if emotion else "unknown",
+                                retry=retry
+                            )
                         # 检测到杂音
                         if retry < max_retries - 1:
                             # 还有重试机会，抛出异常触发重试
@@ -962,6 +1047,7 @@ if __name__ == "__main__":
     parser.add_argument("--use_cuda_kernel", action="store_true", default=False, help="Use CUDA kernel")
     parser.add_argument("--use_deepspeed", action="store_true", default=False, help="Use DeepSpeed")
     parser.add_argument("--verbose", action="store_true", default=False, help="Enable verbose mode")
+    parser.add_argument("--diagnose_mode", action="store_true", default=False, help="Enable diagnose mode for noise detection")
     args = parser.parse_args()
     
     # 创建必要的目录

@@ -8,6 +8,15 @@ import time
 import librosa
 import torch
 import torchaudio
+import sys
+# Add root directory to path to import diagnose_noise_stage
+sys.path.append(os.getcwd())
+try:
+    from diagnose_noise_stage import TTS_Diagnostic_Hook
+except ImportError:
+    print("Warning: diagnose_noise_stage not found, diagnostics disabled")
+    TTS_Diagnostic_Hook = None
+
 from torch.nn.utils.rnn import pad_sequence
 
 import warnings
@@ -342,14 +351,14 @@ class IndexTTS2SubTitle:
               emo_audio_prompt=None, emo_alpha=1.0,
               emo_vector=None,
               use_emo_text=False, emo_text=None, use_random=False, interval_silence=200,
-              verbose=False, max_text_tokens_per_segment=120, stream_return=False, more_segment_before=0, **generation_kwargs):
+              verbose=False, max_text_tokens_per_segment=120, stream_return=False, more_segment_before=0, return_diagnose=False, **generation_kwargs):
         if stream_return:
             return self.infer_generator(
                 spk_audio_prompt, text, output_path,
                 emo_audio_prompt, emo_alpha,
                 emo_vector,
                 use_emo_text, emo_text, use_random, interval_silence,
-                verbose, max_text_tokens_per_segment, stream_return, more_segment_before, **generation_kwargs
+                verbose, max_text_tokens_per_segment, stream_return, more_segment_before, return_diagnose, **generation_kwargs
             )
         else:
             try:
@@ -358,7 +367,7 @@ class IndexTTS2SubTitle:
                     emo_audio_prompt, emo_alpha,
                     emo_vector,
                     use_emo_text, emo_text, use_random, interval_silence,
-                    verbose, max_text_tokens_per_segment, stream_return, more_segment_before, **generation_kwargs
+                    verbose, max_text_tokens_per_segment, stream_return, more_segment_before, return_diagnose, **generation_kwargs
                 ))[0]
             except IndexError:
                 return None
@@ -367,7 +376,7 @@ class IndexTTS2SubTitle:
               emo_audio_prompt=None, emo_alpha=1.0,
               emo_vector=None,
               use_emo_text=False, emo_text=None, use_random=False, interval_silence=200,
-              verbose=False, max_text_tokens_per_segment=120, stream_return=False, quick_streaming_tokens=0, **generation_kwargs):
+              verbose=False, max_text_tokens_per_segment=120, stream_return=False, quick_streaming_tokens=0, return_diagnose=False, **generation_kwargs):
         print(">> starting inference...")
         self._set_gr_progress(0, "starting inference...")
         if verbose:
@@ -529,6 +538,17 @@ class IndexTTS2SubTitle:
         has_warned = False
         silence = None # for stream_return
         
+        # Initialize diagnostic hook
+        diag_hook = None
+        # 如果启用了诊断，确保输出目录存在
+        if TTS_Diagnostic_Hook is not None and return_diagnose:
+             # 创建带有时间戳的唯一子目录，避免并发冲突
+             timestamp = int(time.time() * 1000)
+             diag_output_dir = f"./diagnose_output/{timestamp}"
+             diag_hook = TTS_Diagnostic_Hook(output_dir=diag_output_dir)
+             if verbose:
+                 print(f">> Diagnostics enabled, saving to {diag_output_dir}")
+
         # 字幕信息收集
         subtitles = []
         current_time_ms = 0.0  # 当前累计时间（毫秒）
@@ -613,6 +633,10 @@ class IndexTTS2SubTitle:
                     print(f"fix codes shape: {codes.shape}, codes type: {codes.dtype}")
                     print(f"code len: {code_lens}")
 
+                # Diagnostic: Save GPT codes
+                if diag_hook is not None:
+                    diag_hook.save_codes(codes, seg_idx)
+
                 m_start_time = time.perf_counter()
                 use_speed = torch.zeros(spk_cond_emb.size(0)).to(spk_cond_emb.device).long()
                 with torch.amp.autocast(text_tokens.device.type, enabled=self.dtype is not None, dtype=self.dtype):
@@ -633,13 +657,22 @@ class IndexTTS2SubTitle:
                 dtype = None
                 with torch.amp.autocast(text_tokens.device.type, enabled=dtype is not None, dtype=dtype):
                     m_start_time = time.perf_counter()
-                    diffusion_steps = 25
+                    diffusion_steps = 100
                     inference_cfg_rate = 0.7
                     latent = self.s2mel.models['gpt_layer'](latent)
                     S_infer = self.semantic_codec.quantizer.vq2emb(codes.unsqueeze(1))
                     S_infer = S_infer.transpose(1, 2)
                     S_infer = S_infer + latent
-                    target_lengths = (code_lens * 1.72).long()
+
+                    # Calculate ratio dynamically based on config to match code duration with mel duration
+                    # Semantic codec (w2v-bert) typically has a frame rate of 50Hz
+                    codec_sr = 50
+                    mel_sr = self.cfg.s2mel['preprocess_params']['sr']
+                    mel_hop = self.cfg.s2mel['preprocess_params']['spect_params']['hop_length']
+                    # ratio = (mel_sr / mel_hop) / codec_sr
+                    ratio = mel_sr / (mel_hop * codec_sr)
+                    
+                    target_lengths = (code_lens * ratio).long()
 
                     cond = self.s2mel.models['length_regulator'](S_infer,
                                                                  ylens=target_lengths,
@@ -652,6 +685,11 @@ class IndexTTS2SubTitle:
                                                                    ref_mel, style, None, diffusion_steps,
                                                                    inference_cfg_rate=inference_cfg_rate)
                     vc_target = vc_target[:, :, ref_mel.size(-1):]
+                    
+                    # Diagnostic: Save S2Mel (CFM) output
+                    if diag_hook is not None:
+                        diag_hook.save_mel(vc_target, "CFM_output", seg_idx)
+
                     s2mel_time += time.perf_counter() - m_start_time
 
                     m_start_time = time.perf_counter()
@@ -663,6 +701,11 @@ class IndexTTS2SubTitle:
                 wav = torch.clamp(32767 * wav, -32767.0, 32767.0)
                 if verbose:
                     print(f"wav shape: {wav.shape}", "min:", wav.min(), "max:", wav.max())
+                
+                # Diagnostic: Save BigVGAN output
+                if diag_hook is not None:
+                    diag_hook.save_wav(wav, sampling_rate, seg_idx)
+                
                 # wavs.append(wav[:, :-512])
                 wavs.append(wav.cpu())  # to cpu before saving
                 
@@ -700,6 +743,15 @@ class IndexTTS2SubTitle:
                         silence = self.interval_silence(wavs, sampling_rate=sampling_rate, interval_silence=interval_silence)
                     yield silence
         end_time = time.perf_counter()
+
+        # Generate diagnostic report
+        diag_report = {}
+        if diag_hook is not None:
+            diag_report = diag_hook.generate_report()
+            # 添加输出目录到报告中，以便 api_server 知道去哪里找文件
+            diag_report["output_dir"] = str(diag_hook.output_dir)
+            if verbose:
+                print(f">> Diagnostic report generated: {diag_report.get('summary')}")
 
         self._set_gr_progress(0.9, "saving audio...")
         wavs = self.insert_interval_silence(wavs, sampling_rate=sampling_rate, interval_silence=interval_silence)
@@ -742,7 +794,7 @@ class IndexTTS2SubTitle:
             # 返回以符合Gradio的格式要求，同时包含字幕信息
             wav_data = wav.type(torch.int16)
             wav_data = wav_data.numpy().T
-            yield {"audio_data": (sampling_rate, wav_data), "subtitles": subtitles}
+            yield {"audio_data": (sampling_rate, wav_data), "subtitles": subtitles, "diagnose": diag_report}
 
 
 if __name__ == "__main__":
