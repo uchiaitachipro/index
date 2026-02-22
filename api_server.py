@@ -405,6 +405,7 @@ async def _process_story_audio_generation(story_data: list, custom_voice_map: Op
         sex = item.get("sex", "unknown")
         name = item.get("name", "")
         emotion = item.get("emotion", None)
+        chapter_num = item.get("chapter_number", 0)  # 获取章节号，默认为 0
         
         # 去除文本首尾的标点符号
         while text and text[0] in chinese_punctuation:
@@ -537,7 +538,7 @@ async def _process_story_audio_generation(story_data: list, custom_voice_map: Op
                     if has_noise:
                         if api_verbose:
                             timestamp = int(time.time() * 1000)
-                            save_audio_path = f"uploads/noise/noise_{timestamp}.wav"
+                            save_audio_path = f"uploads/noise/{chapter_num}_noise_{timestamp}.wav"
                             os.makedirs(os.path.dirname(save_audio_path), exist_ok=True)
                             with open(save_audio_path, "wb") as f:
                                 f.write(wav_bytes)
@@ -736,7 +737,8 @@ async def generate_story_audio_json(request: Request):
                 "text": "我要再去西漠。",  // 要转成语音的文本
                 "sex": "wo",  // 性别：man=男, wo=女, unknown=未知
                 "name": "安妙依",  // 人物名
-                "emotion": null  // 情绪状态：happy, sad, angry, afraid, disgusted, surprised, calm, fearful 等
+                "emotion": null  // 情绪状态：happy, sad, angry, afraid, disgusted, surprised, calm, fearful 等,
+                "chapter_number":  -1 // 章节号：-1 表示不分章节
             },
             ...
         ],
@@ -856,6 +858,7 @@ async def generate_story_audio_single(request: Request):
             "sex": "wo",  // 性别：man=男, wo=女, unknown=未知
             "name": "安妙依",  // 人物名
             "emotion": null  // 情绪状态：happy, sad, angry, afraid, disgusted, surprised, calm, fearful 等
+            "chapter_number":  -1 // 章节号：-1 表示不分章节
         },
         "voice_map": [  // 可选：自定义音色映射
             {
@@ -1028,7 +1031,7 @@ async def split_text(request: Request):
 
         # 分割文本
         segments = split_text_by_characters(text, max_chars_per_segment)
-
+        
         return JSONResponse(status_code=200, content={"status": "success", "segments": segments})
 
     except ValueError as ve:
