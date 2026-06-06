@@ -1,6 +1,8 @@
+import csv
 import html
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -17,6 +19,78 @@ sys.path.append(current_dir)
 sys.path.append(os.path.join(current_dir, "indextts"))
 
 import argparse
+
+
+def query_nvidia_gpus():
+    result = subprocess.run(
+        [
+            "nvidia-smi",
+            "--query-gpu=index,name,pci.bus_id,uuid",
+            "--format=csv,noheader",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    gpus = []
+    for row in csv.reader(result.stdout.splitlines()):
+        if len(row) < 4:
+            continue
+        gpus.append(
+            {
+                "index": row[0].strip(),
+                "name": row[1].strip(),
+                "pci_bus_id": row[2].strip(),
+                "uuid": row[3].strip(),
+            }
+        )
+    return gpus
+
+
+def select_nvidia_gpu(gpu_name=None, gpu_uuid=None):
+    if not gpu_name and not gpu_uuid:
+        return None
+
+    if gpu_name and gpu_uuid:
+        print("Please set only one of --gpu-name or --gpu-uuid.")
+        sys.exit(1)
+
+    try:
+        gpus = query_nvidia_gpus()
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        print(f"Unable to query NVIDIA GPUs with nvidia-smi: {exc}")
+        sys.exit(1)
+
+    if gpu_uuid:
+        matches = [gpu for gpu in gpus if gpu["uuid"] == gpu_uuid or gpu["uuid"].startswith(gpu_uuid)]
+        selector = f'UUID "{gpu_uuid}"'
+    else:
+        gpu_name_lower = gpu_name.lower()
+        matches = [gpu for gpu in gpus if gpu_name_lower in gpu["name"].lower()]
+        selector = f'name containing "{gpu_name}"'
+
+    if not matches:
+        print(f"No NVIDIA GPU matched {selector}. Available GPUs:")
+        for gpu in gpus:
+            print(f'  {gpu["index"]}: {gpu["name"]} ({gpu["pci_bus_id"]}, {gpu["uuid"]})')
+        sys.exit(1)
+
+    if len(matches) > 1:
+        print(f"Multiple NVIDIA GPUs matched {selector}. Use --gpu-uuid to choose one:")
+        for gpu in matches:
+            print(f'  {gpu["index"]}: {gpu["name"]} ({gpu["pci_bus_id"]}, {gpu["uuid"]})')
+        sys.exit(1)
+
+    gpu = matches[0]
+    os.environ["CUDA_VISIBLE_DEVICES"] = gpu["uuid"]
+    print(
+        f'Using NVIDIA GPU {gpu["index"]}: {gpu["name"]} '
+        f'({gpu["pci_bus_id"]}, {gpu["uuid"]})'
+    )
+    print("Set CUDA_VISIBLE_DEVICES to the selected GPU UUID. PyTorch will see it as cuda:0.")
+    return gpu
+
+
 parser = argparse.ArgumentParser(
     description="IndexTTS WebUI",
     formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -29,7 +103,13 @@ parser.add_argument("--fp16", action="store_true", default=False, help="Use FP16
 parser.add_argument("--deepspeed", action="store_true", default=False, help="Use DeepSpeed to accelerate if available")
 parser.add_argument("--cuda_kernel", action="store_true", default=False, help="Use CUDA kernel for inference if available")
 parser.add_argument("--gui_seg_tokens", type=int, default=120, help="GUI: Max tokens per generation segment")
+parser.add_argument("--device", type=str, default=None, help="Device to run the model on (cuda:0, cuda:1, cpu, mps, xpu)")
+parser.add_argument("--gpu-name", type=str, default=None, help="Select an NVIDIA GPU by name substring before PyTorch loads")
+parser.add_argument("--gpu-uuid", type=str, default=None, help="Select an NVIDIA GPU by UUID or UUID prefix before PyTorch loads")
 cmd_args = parser.parse_args()
+selected_gpu = select_nvidia_gpu(gpu_name=cmd_args.gpu_name, gpu_uuid=cmd_args.gpu_uuid)
+if selected_gpu and cmd_args.device is None:
+    cmd_args.device = "cuda:0"
 
 if not os.path.exists(cmd_args.model_dir):
     print(f"Model directory {cmd_args.model_dir} does not exist. Please download the model first.")
@@ -58,6 +138,7 @@ tts = IndexTTS2(model_dir=cmd_args.model_dir,
                 use_fp16=cmd_args.fp16,
                 use_deepspeed=cmd_args.deepspeed,
                 use_cuda_kernel=cmd_args.cuda_kernel,
+                device=cmd_args.device,
                 )
 # 支持的语言列表
 LANGUAGES = {
